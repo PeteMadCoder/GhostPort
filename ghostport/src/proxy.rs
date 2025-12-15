@@ -24,7 +24,6 @@ use crate::jail::Jail;
 // Constants
 const HEADER_READ_TIMEOUT: u64 = 5; // seconds
 
-// Load Certificates
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, Box<dyn Error>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -33,7 +32,6 @@ fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, Box<dyn Error
     Ok(certs)
 }
 
-// Load Private Key
 fn load_keys(path: &Path) -> Result<PrivateKeyDer<'static>, Box<dyn Error>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -49,7 +47,7 @@ fn load_keys(path: &Path) -> Result<PrivateKeyDer<'static>, Box<dyn Error>> {
 
 pub async fn start_proxy(
     config: Config, 
-    whitelist: Arc<Mutex<HashMap<IpAddr, Instant>>>, 
+    whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>>, 
     waf: Arc<WafEngine>,
     jail: Jail
 ) {
@@ -59,7 +57,6 @@ pub async fn start_proxy(
     println!("GhostPort (TCP) listening on {}", addr);
     println!("Forwarding traffic to {}", config.backend.target_addr);
 
-    // Setup TLS if enabled
     let tls_acceptor = if config.server.tls_enabled {
         println!("TLS Enabled. Loading certs...");
         let certs = load_certs(Path::new(&config.server.cert_path)).expect("Failed to load certs");
@@ -75,13 +72,11 @@ pub async fn start_proxy(
         None
     };
 
-    // Connection Limiter (DoS Protection)
     let max_conn = config.server.max_connections.unwrap_or(1000);
     let connection_limit = Arc::new(Semaphore::new(max_conn));
-    println!("🛡️ DoS Shield Active: Max {} concurrent connections", max_conn);
+    println!("DoS Shield Active: Max {} concurrent connections", max_conn);
 
     loop {
-        // 1. Accept Connection
         let (client_socket, addr) = match listener.accept().await {
             Ok(x) => x,
             Err(e) => {
@@ -90,14 +85,10 @@ pub async fn start_proxy(
             }
         };
 
-        // 2. JAIL CHECK (Active Defense)
-        // If banned, drop immediately.
         if !jail.check_ip(addr.ip()) {
-            // Silent drop (don't even log to avoid log spam)
             continue; 
         }
 
-        // 3. Acquire Permit
         let permit = match connection_limit.clone().acquire_owned().await {
             Ok(p) => p,
             Err(e) => {
@@ -138,14 +129,12 @@ async fn handle_connection<T>(
     mut client_socket: T, 
     addr: std::net::SocketAddr,
     config: Config,
-    whitelist: Arc<Mutex<HashMap<IpAddr, Instant>>>,
+    whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>>,
     waf: Arc<WafEngine>,
     jail: Jail
 ) -> Result<(), Box<dyn Error>> 
 where T: AsyncRead + AsyncWrite + Unpin + Send 
 {
-
-    // 1. Read Headers (Peek) with TIMEOUT
     let mut buffer = [0; 4096];
     
     let read_result = timeout(
@@ -156,14 +145,11 @@ where T: AsyncRead + AsyncWrite + Unpin + Send
     let n = match read_result {
         Ok(Ok(n)) => n,
         Ok(Err(e)) => return Err(Box::new(e)),
-        Err(_) => {
-            return Err("Slowloris Timeout".into());
-        }
+        Err(_) => return Err("Slowloris Timeout".into()),
     };
 
     if n == 0 { return Ok(()); }
 
-    // 2. Parse Headers
     let headers_end = buffer[..n].windows(4).position(|w| w == b"\r\n\r\n")
         .ok_or("Invalid HTTP: No header terminator")?;
     
@@ -185,44 +171,52 @@ where T: AsyncRead + AsyncWrite + Unpin + Send
     match decision {
         RoutingDecision::DefaultBlock => {
             send_alert(config.clone(), format!("Blocked access to unknown route {} from {}", path, addr), AlertLevel::Warning).await;
-            jail.add_strike(addr.ip()); // Strike! 
+            jail.add_strike(addr.ip()); 
             let resp = "HTTP/1.1 403 Forbidden\r\n\r\n<h1>403 Forbidden</h1>";
             client_socket.write_all(resp.as_bytes()).await?;
             return Ok(());
         }
         RoutingDecision::Matched(rule) => {
             if rule.rule_type == "public" {
-                // Public Route: Proceed (WAF Check below)
+                // Public Route: Proceed
             } else if rule.rule_type == "private" {
-                // Check Whitelist with Expiry
-                let is_authorized = {
+                // RBAC + Session Check
+                let auth_result = {
                     let mut list = whitelist.lock().unwrap();
-                    if let Some(timestamp) = list.get(&addr.ip()) {
+                    if let Some((timestamp, roles)) = list.get(&addr.ip()) {
                         if timestamp.elapsed() < Duration::from_secs(config.security.session_timeout) {
-                            true
+                            // Check Roles
+                            if let Some(allowed) = &rule.allowed_roles {
+                                // Intersection Check
+                                if roles.iter().any(|r| allowed.contains(r)) {
+                                    Ok(())
+                                } else {
+                                    Err("Insufficient Roles")
+                                }
+                            } else {
+                                // No specific roles required, just login
+                                Ok(())
+                            }
                         } else {
-                            println!("Session expired for {}", addr.ip());
                             list.remove(&addr.ip());
-                            false
+                            Err("Session Expired")
                         }
                     } else {
-                        false
+                        Err("Not Logged In")
                     }
                 };
 
-                if !is_authorized {
-                    println!("BLOCKED PRIVATE ROUTE: {} tried accessing {}", addr, path);
+                if let Err(reason) = auth_result {
+                    println!("BLOCKED PRIVATE ROUTE ({}) : {} tried accessing {}", reason, addr, path);
                     
                     if rule.on_fail == "honeypot" {
-                        // NO STRIKE - Let them play
                         println!("Redirecting to HONEYPOT (Intelligence Mode)");
                         if let Err(e) = serve_honeypot(client_socket, config.clone(), addr.to_string(), method).await {
                              eprintln!("Honeypot error: {}", e);
                         }
                     } else {
-                        // STRIKE & BLOCK
                         jail.add_strike(addr.ip()); 
-                        send_alert(config.clone(), format!("🛑 Unauthorized access to {} from {}", path, addr), AlertLevel::Warning).await;
+                        send_alert(config.clone(), format!("Unauthorized ({}) access to {} from {}", reason, path, addr), AlertLevel::Warning).await;
                         let resp = "HTTP/1.1 403 Forbidden\r\n\r\n<h1>Access Denied</h1>";
                         client_socket.write_all(resp.as_bytes()).await?;
                     }
@@ -233,36 +227,31 @@ where T: AsyncRead + AsyncWrite + Unpin + Send
     }
 
     // 4. WAF CHECK
-    // If WAF triggers, we ALWAYS strike, because payloads are malicious regardless of route.
     if let Some(threat) = waf.check_request(path, &header_str) {
-         println!("🔥 WAF DETECTED: {} from {}", threat, addr);
-         send_alert(config.clone(), format!("🔥 WAF DETECTED ATTACK from {}: {} ({})", addr, path, threat), AlertLevel::Critical).await;
-         
+         println!("WAF DETECTED: {} from {}", threat, addr);
+         send_alert(config.clone(), format!("WAF DETECTED ATTACK from {}: {} ({})", addr, path, threat), AlertLevel::Critical).await;
          jail.add_strike(addr.ip()); 
-         
          let resp = "HTTP/1.1 403 Forbidden\r\n\r\n<h1>Malicious Request Detected</h1>";
          client_socket.write_all(resp.as_bytes()).await?;
          return Ok(());
     }
 
-    // 5. Connect to Backend
+    // 5. Forward
     let mut backend_socket = TcpStream::connect(&config.backend.target_addr).await?;
 
-    // 6. Rewrite Headers
     let mut new_headers = String::new();
     new_headers.push_str(request_line);
     new_headers.push_str("\r\n");
     for line in lines {
-                if line.to_lowercase().starts_with("host:") {
-                    new_headers.push_str(&format!("Host: {}\r\n", config.backend.target_host));
-                } else {
+        if line.to_lowercase().starts_with("host:") {
+            new_headers.push_str(&format!("Host: {}\r\n", config.backend.target_host));
+        } else {
             new_headers.push_str(line);
             new_headers.push_str("\r\n");
         }
     }
     new_headers.push_str("\r\n");
 
-    // 7. Forward
     backend_socket.write_all(new_headers.as_bytes()).await?;
     let body_start = headers_end + 4;
     if body_start < n {

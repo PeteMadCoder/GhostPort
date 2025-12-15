@@ -49,14 +49,14 @@ impl Jail {
         let count = state.strikes.entry(ip).or_insert(0);
         *count += 1;
 
-        println!("⚠️ Strike {}/{} for IP: {}", count, self.max_strikes, ip);
+        println!("Strike {}/{} for IP: {}", count, self.max_strikes, ip);
 
         // 2. Check if we should ban
         if *count >= self.max_strikes {
             let expiry = Instant::now() + self.ban_duration;
             state.banned_ips.insert(ip, expiry);
             state.strikes.remove(&ip); // Reset strikes
-            println!("⛔ BANNED IP: {} for {:?}", ip, self.ban_duration);
+            println!("BANNED IP: {} for {:?}", ip, self.ban_duration);
         }
     }
 
@@ -66,6 +66,6 @@ impl Jail {
         let expiry = Instant::now() + self.ban_duration;
         state.banned_ips.insert(ip, expiry);
         state.strikes.remove(&ip);
-        println!("⛔ INSTANT BAN: IP {}", ip);
+        println!("INSTANT BAN: IP {}", ip);
     }
 }

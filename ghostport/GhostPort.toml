@@ -1,85 +1,65 @@
 # ==========================================
-# GHOSTPORT CONFIGURATION v2.0
+# GHOSTPORT CONFIGURATION v3.0 (RBAC + TOTP)
 # ==========================================
 
 [server]
-# The IP/Port the world sees
 listen_ip = "0.0.0.0"
 listen_port = 8443
-# ENCRYPTION (The "Cyfered" feature)
-# If true, GhostPort decrypts traffic using these certs before inspection
 tls_enabled = true
 cert_path = "./certs/server.crt"
 key_path = "./certs/server.key"
+max_connections = 1000
 
 [backend]
-# Where the actual app lives (hidden from the world)
 target_addr = "127.0.0.1:8080"
 target_host = "myapp.local"
 
 [security]
-# GLOBAL SECURITY SETTINGS
-# If true, all traffic is analyzed for patterns like SQLi
+auth_mode = "user_totp"
+replay_window = 90
 enable_deep_analysis = true
-# The secret password for the UDP Knock
-knock_token = "OpenSesame_v2"
-# How long (in seconds) an IP stays whitelisted before needing to "re-login"
 session_timeout = 300
-# Honeypot HTML template
-# honeypot_file = "./honeypot.html"
 
 [security.ban]
 enabled = true
-ban_duration = 3600        # Ban duration in seconds (1 hour)
-max_violations = 3         # How many "strikes" before banning?
+ban_duration = 3600
+max_violations = 3
 
-[reporting]
-# EXTERNAL SERVICE
-# Real-time alerts will be POSTed here
-webhook_url = "https://discord.com/api/webhooks/12345/abcde"
-# Should we log every single request, or just attacks?
-log_all_requests = false
+# --- USERS ---
 
-# ==========================================
-# TRAFFIC RULES
-# ==========================================
+[[users]]
+username = "pedro"
+roles = ["superadmin", "dev"] 
+secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" 
 
-# RULE 1: Public Website (e.g., Blog)
-# Accessible by anyone. Protected by basic WAF.
+[[users]]
+username = "bob"
+roles = ["auditor"]
+secret = "KBSWY3DPEHPK3PXPKBSWY3DPEHPK3PXP"
+
+# --- RULES ---
+
+# Rule 1: The Fortress (Only SuperAdmins)
+[[rules]]
+path = "/admin"
+type = "private"
+allowed_roles = ["superadmin"] 
+on_fail = "honeypot"
+
+# Rule 2: The Logs (Auditors AND SuperAdmins)
+[[rules]]
+path = "/logs"
+type = "private"
+allowed_roles = ["superadmin", "auditor"]
+on_fail = "block"
+
+# Rule 3: Public
 [[rules]]
 path = "/"
 type = "public"
 strict_waf = true
 on_fail = "block"
 
-# RULE 2: The Admin Panel (High Security)
-# Accessible ONLY if IP is whitelisted (knocked).
-# If unauthorized, send to Honeypot to track them.
-[[rules]]
-path = "/admin"
-type = "private"
-strict_waf = true
-on_fail = "honeypot"
-
-# RULE 3: API (Semi-Public)
-# Accessible by anyone, but logs are critical.
-[[rules]]
-path = "/api"
-type = "public"
-strict_waf = false # Allow complex JSON, maybe looser rules
-on_fail = "block"
-
-# RULE 4: Honeypot Trap
-# Capture login attempts
-[[rules]]
-path = "/login_check"
-type = "private"
-strict_waf = false
-on_fail = "honeypot"
-
-# RULE 5: Strict Block
-[[rules]]
-path = "/secret"
-type = "private"
-strict_waf = true
-on_fail = "block"
+[reporting]
+webhook_url = "https://discord.com/api/webhooks/12345/abcde"
+log_all_requests = false

@@ -9,6 +9,7 @@ pub struct Config {
     pub security: SecurityConfig,
     pub reporting: ReportingConfig,
     pub rules: Vec<RuleConfig>,
+    pub users: Option<Vec<UserConfig>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -37,10 +38,11 @@ pub struct BanConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct SecurityConfig {
     pub enable_deep_analysis: bool,
-    pub knock_token: String,
     pub session_timeout: u64,
     pub honeypot_file: Option<String>,
     pub ban: BanConfig,
+    pub auth_mode: Option<String>,
+    pub replay_window: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -53,9 +55,17 @@ pub struct ReportingConfig {
 pub struct RuleConfig {
     pub path: String,
     #[serde(rename = "type")]
-    pub rule_type: String, // "public" or "private"
-    pub strict_waf: bool,
-    pub on_fail: String, // "block", "honeypot"
+    pub rule_type: String,
+    pub strict_waf: Option<bool>,
+    pub on_fail: String,
+    pub allowed_roles: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct UserConfig {
+    pub username: String,
+    pub roles: Vec<String>,
+    pub secret: Option<String>,
 }
 
 pub fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
