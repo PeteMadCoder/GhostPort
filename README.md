@@ -1,6 +1,6 @@
 # GhostPort
 > **Zero-Trust Identity Aware Proxy**\
-> **Current Version:** v3.0 (Identity Access Management Edition)\
+> **Current Version:** v4.0 (Crypto-Identity Edition)\
 > **Status:** Production-Ready Core / Pre-UI\
 > **Language:** Rust
 
@@ -11,11 +11,9 @@
 
 It combines the features of a **Firewall** (SPA/Port Knocking), a **WAF** (Web Application Firewall), an **IDS** (Intrusion Detection/Honeypot), and an **IAM** (Identity Access Management) system into a single, dependency-free binary.
 
-
-
 ---
 
-## Architecture (v3.0)
+## Architecture (v4.0)
 GhostPort operates using a "Defense in Depth" pipeline. Traffic must pass through multiple security layers before reaching the backend.
 
 ```mermaid
@@ -23,9 +21,9 @@ graph TD
     Attacker[Attacker] -->|TCP Connect| Jail[Jailkeeper]
     Jail -->|Banned?| Drop[Drop Connection]
     
-    User[Legit User] -->|UDP Knock| Gate[Gatekeeper]
-    Gate -->|Verify TOTP| Auth[Auth Engine]
-    Auth -->|Valid?| Whitelist[Update Session Table]
+    Client[Client] -->|Noise Handshake| Gate[Gatekeeper]
+    Gate -->|Decrypt & Verify| Auth[Key Registry]
+    Auth -->|Valid PubKey?| Whitelist[Update Session Table]
     
     Jail -->|Allowed| Semaphore[Concurrency Limit]
     Semaphore --> TLS[TLS Decryption]
@@ -37,22 +35,31 @@ graph TD
     
     RBAC -->|No| Honeypot[Honeypot]
     RBAC -->|Yes| Backend[Backend App]
-
 ```
 
-### Key Modules*
-**`src/main.rs`**: The Orchestrator. Manages the TCP/UDP threads and shared state.
-* **`src/auth.rs`**: **(New in v3.0)** The Identity Engine. Handles TOTP verification (`HMAC-SHA1`) and prevents Replay Attacks via a "Burnt Code" cache.
+### Key Modules
+* **`src/main.rs`**: The Orchestrator. Manages the TCP/UDP threads and shared state.
+* **`src/knocker.rs`**: **(New in v4.0)** The Client. Initiates a `Noise_IK_25519_ChaChaPoly_BLAKE2s` handshake.
+* **`src/udp.rs`**: The Listener. Acts as a Noise Responder. Silently drops any packet that cannot be decrypted with the Server's Private Key.
+* **`src/crypto.rs`**: **(New in v4.0)** Handles the symmetric encryption (`ChaCha20Poly1305`) of the Server's configuration secrets.
+* **`src/auth.rs`**: **(Updated in v4.0)** Maps Client Public Keys to Roles (e.g., `admin`, `dev`) instead of TOTP codes.
 * **`src/jail.rs`**: **(New in v2.1)** Active Defense. Instantly drops connections from banned IPs before they consume resources.
 * **`src/router.rs`**: Role-Based Access Control (RBAC). Checks if the authenticated user has the required roles (e.g., `["admin"]`) for the requested path.
 * **`src/waf.rs`**: Regex-based inspection engine to block SQLi, XSS, and Traversal attacks.
-* **`src/udp.rs`**: The SPA listener. Parses `User:TOTP` packets to authorize sessions.
 * **`src/honeypot.rs`**: Interactive deception module. Serves fake login pages to capture attacker credentials and monitor attackers.
 
 ---
 
 ## Version History & Changelog
-### **v3.0: Identity & Access Management (Current)**
+
+### **v4.0: Crypto-Identity Edition (Current)**
+* **Feature:** **Noise Protocol Integration**. Replaced TOTP/String knocks with a cryptographically secure handshake (`Noise_IK_25519_ChaChaPoly_BLAKE2s`).
+* **Feature:** **Mutual Authentication**. Both Client and Server verify each other's identities using static public keys.
+* **Feature:** **Encrypted Configuration**. The Server's Private Key is stored as an encrypted blob on disk, decrypted only at runtime via Environment Variable.
+* **Feature:** **New CLI**. Added `knock` (client) and `keygen` (utility) commands.
+* **Security:** **Zero Plaintext Secrets**. No sensitive keys exist in plaintext within `GhostPort.toml`.
+
+### **v3.0: Identity & Access Management**
 * **Feature:** **TOTP Integration**. Static passwords replaced with Time-based One-Time Passwords.
 * **Feature:** **Replay Protection**. Codes are "burned" immediately after use. Sniffing a packet is now useless to an attacker.
 * **Feature:** **RBAC (Role-Based Access Control)**. Users have multiple roles (e.g., `dev`, `admin`). Endpoints enforce specific role requirements.
@@ -63,8 +70,6 @@ graph TD
 * **Feature:** **DoS Protection**.
 * **Slowloris:** Enforced 5-second timeouts on HTTP headers.
 * **Connection Floods:** Added Semaphore to limit max concurrent connections (Default: 1000).
-
-
 * **Fix:** WAF now URL-decodes payloads (handling `%27` vs `'`) before inspection.
 
 ### **v2.0: The Security Gateway**
@@ -90,101 +95,147 @@ listen_port = 8443
 tls_enabled = true
 cert_path = "./certs/server.crt"
 key_path = "./certs/server.key"
+max_connections = 1000
+
+[backend]
+target_addr = "127.0.0.1:8080"
+target_host = "myapp.local"
 
 [security]
-auth_mode = "user_totp"
-replay_window = 90      # Seconds to keep used codes in memory
-max_strikes = 3         # Strikes before ban
-ban_duration = 3600     # Ban time in seconds
+enable_deep_analysis = true
+session_timeout = 300
+# The Server's Private Key (Encrypted with your Master Password)
+# Run `ghostport keygen --master-key "secret"` to generate.
+encrypted_private_key = "REPLACE_WITH_GENERATED_ENCRYPTED_KEY"
 
-# --- IDENTITY MANAGEMENT ---
+[security.ban]
+enabled = true
+ban_duration = 3600
+max_violations = 3
+
+# --- USERS ---
+# Map Client Public Keys to Identity & Roles
 
 [[users]]
 username = "user_admin"
 roles = ["superadmin", "dev"]
-# Base32 Secret for TOTP (Use an app to scan this)
-secret = "JBSWY3DPEHPK3PXP" 
+# The Client's Public Key (Base64)
+public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY"
 
 [[users]]
-username = "guest_auditor"
+username = "bob"
 roles = ["auditor"]
-secret = "KBSWY3DPEHPK3PXP"
+public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY_2"
 
 # --- ROUTING RULES ---
 
-# Public Area
-[[rules]]
-path = "/"
-type = "public"
-strict_waf = true
-
-# Protected Admin Panel (Requires 'superadmin' role)
+# Rule 1: The Fortress (Only SuperAdmins)
 [[rules]]
 path = "/admin"
 type = "private"
 allowed_roles = ["superadmin"]
-on_fail = "honeypot" 
+on_fail = "honeypot"
 
-# Logs (Requires 'auditor' OR 'superadmin')
+# Rule 2: The Logs (Auditors AND SuperAdmins)
 [[rules]]
 path = "/logs"
 type = "private"
-allowed_roles = ["auditor", "superadmin"]
+allowed_roles = ["superadmin", "auditor"]
 on_fail = "block"
 
+# Rule 3: Public
+[[rules]]
+path = "/"
+type = "public"
+strict_waf = true
+on_fail = "block"
+
+[reporting]
+webhook_url = "https://discord.com/api/webhooks/12345/abcde"
+log_all_requests = false
 ```
 
 ---
 
 ## How to Run
+
 ### Prerequisites
 1. **Rust Toolchain:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 2. **Generate Certs (Local):**
 ```bash
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
-
 ```
 
+### 1. Installation & Build
+```bash
+# Clone and Build
+git clone https://github.com/MadCoder/GhostPort.git
+cd GhostPort/ghostport
+cargo build --release
+```
 
+### 2. Generate Identities
+GhostPort v4.0 uses **Mutual Authentication**. Both the Server and the Client need their own Keypairs.
 
-### Running the Server
+**Step A: Generate Server Keys**
+```bash
+# Replace 'my_secret' with a strong master password
+cargo run -- keygen --master-key "my_secret"
+```
+*Output:*
+1.  **Encrypted Private Key**: Copy this to `GhostPort.toml` under `[security]`.
+2.  **Public Key**: Save this. You will give this to your Clients (`SERVER_PUB`).
+
+**Step B: Generate Client Keys**
+```bash
+cargo run -- keygen --master-key "temp" 
+```
+*Output:*
+1.  **Public Key**: Copy this to `GhostPort.toml` under `[[users]]`.
+2.  **Raw Private Key**: Save this securely. The Client needs this to knock (`CLIENT_PRIV`).
+
+### 3. Running the Server
+You must provide the Master Key environment variable to decrypt the config at runtime.
 ```bash
 # 1. Start your backend (e.g., a python server)
 python3 -m http.server 8080 &
 
-# 2. Run GhostPort
-cargo run --release
-
+# 2. Run GhostPort Server
+export GHOSTPORT_MASTER_KEY="my_secret"
+cargo run -- server
 ```
 
-### Authenticating (The "Knock")
-Since v3.0 uses TOTP, you cannot just send a static string. You must generate a code.
-
-**Option A: Python Helper Script**
-
-```python
-import pyotp
-import socket
-
-# Your Secret from config
-totp = pyotp.TOTP("JBSWY3DPEHPK3PXP") 
-code = totp.now()
-payload = f"user_admin:{code}"
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.sendto(payload.encode(), ("127.0.0.1", 9000))
-print(f"Sent Knock: {payload}")
-
-```
-
-**Option B: Manual (If you are fast!)**
-Use Google Authenticator with the secret `JBSWY3DPEHPK3PXP`.
+### 4. Authenticating (The "Knock")
+Standard tools like `nc` or `telnet` **cannot** be used anymore because the packets are encrypted. Use the built-in `knock` command.
 
 ```bash
-# Replace 123456 with your current code
-echo -n "user_admin:123456" | nc -u -w 1 127.0.0.1 9000
-
+cargo run -- knock \
+  --server "127.0.0.1:9000" \
+  --server-pub "<SERVER_PUB>" \
+  --my-priv "<CLIENT_PRIV>"
 ```
+*If successful, the Server logs will show: `Authorized Noise Session: user_admin`*
+
+---
+
+## The "Invisible Server" Philosophy
+GhostPort is designed to be completely invisible to port scanners (e.g., Shodan, Nmap). 
+By default, **ALL TCP connections are dropped** unless the source IP has successfully "knocked" via UDP.
+
+**There are no "Open Ports".**
+
+### How to serve Public Pages?
+If you have an application that needs to expose a public route (e.g., a mobile app login screen or a status page), you should use the **"Guest Identity"** tactic:
+
+1.  Generate a standard Client Keypair using `ghostport keygen`.
+2.  Register the Public Key in `GhostPort.toml` with **no special roles** (e.g., `roles = ["guest"]` or empty).
+3.  Embed the corresponding Private Key into your application (mobile app, frontend server, etc.).
+4.  Configure the application to send a "Knock" packet before attempting to connect.
+
+This ensures that:
+1.  Your server remains invisible to the general public and scanners.
+2.  Only your specific application (which holds the guest key) can even *see* that port 8443 is open.
+3.  Once connected, the `router.rs` will restrict this user to only `type = "public"` paths.
 
 ---
 

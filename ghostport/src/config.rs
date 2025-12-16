@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::fs;
 use std::error::Error;
+use std::env;
+use crate::crypto::decrypt_private_key;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -10,6 +12,18 @@ pub struct Config {
     pub reporting: ReportingConfig,
     pub rules: Vec<RuleConfig>,
     pub users: Option<Vec<UserConfig>>,
+}
+
+impl Config {
+    pub fn get_private_key(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let encrypted = self.security.encrypted_private_key.as_ref()
+            .ok_or("Configuration missing 'security.encrypted_private_key'")?;
+            
+        let master_key = env::var("GHOSTPORT_MASTER_KEY")
+            .map_err(|_| "Environment variable GHOSTPORT_MASTER_KEY not set. Cannot decrypt private key.")?;
+            
+        decrypt_private_key(&master_key, encrypted)
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -41,8 +55,8 @@ pub struct SecurityConfig {
     pub session_timeout: u64,
     pub honeypot_file: Option<String>,
     pub ban: BanConfig,
-    pub auth_mode: Option<String>,
-    pub replay_window: Option<u64>,
+    pub encrypted_private_key: Option<String>,
+    pub authorized_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -65,7 +79,7 @@ pub struct RuleConfig {
 pub struct UserConfig {
     pub username: String,
     pub roles: Vec<String>,
-    pub secret: Option<String>,
+    pub public_key: Option<String>,
 }
 
 pub fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {

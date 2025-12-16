@@ -1,5 +1,5 @@
 # ==========================================
-# GHOSTPORT CONFIGURATION v3.0 (RBAC + TOTP)
+# GHOSTPORT CONFIGURATION v4.0 (Noise + RBAC)
 # ==========================================
 
 [server]
@@ -15,10 +15,16 @@ target_addr = "127.0.0.1:8080"
 target_host = "myapp.local"
 
 [security]
-auth_mode = "user_totp"
-replay_window = 90
 enable_deep_analysis = true
 session_timeout = 300
+# The Encrypted Private Key for the Noise Server (Base64)
+# Run `ghostport keygen --master-key "secret"` to generate.
+# Ensure GHOSTPORT_MASTER_KEY env var is set to "secret" when running the server.
+encrypted_private_key = "i0KicWePaJUgdco66BGANMsDJAXoAYjuvPVHrZYjT98I0RUPbkz1p1+31/VgDWONGAyZFoRc6l2s/L+b"
+# Server's public_key = RnYhLaORiMPZ+IIufaaooSxl/Nb1vXTlVz17FnxmljY=
+
+# Optional: List of authorized Client Public Keys (if not using [[users]] list)
+# authorized_keys = []
 
 [security.ban]
 enabled = true
@@ -26,16 +32,18 @@ ban_duration = 3600
 max_violations = 3
 
 # --- USERS ---
+# Map Client Public Keys to Identity & Roles
 
 [[users]]
-username = "pedro"
+username = "user_admin"
 roles = ["superadmin", "dev"] 
-secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" 
+# The Client's Public Key (Base64)
+public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY"
 
 [[users]]
 username = "bob"
 roles = ["auditor"]
-secret = "KBSWY3DPEHPK3PXPKBSWY3DPEHPK3PXP"
+public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY_2"
 
 # --- RULES ---
 

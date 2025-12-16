@@ -7,6 +7,8 @@ pub mod reporting;
 pub mod honeypot;
 pub mod jail;
 pub mod auth;
+pub mod crypto;
+pub mod knocker;
 
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
