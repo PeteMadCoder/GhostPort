@@ -48,6 +48,9 @@ enum Commands {
         /// Your Private Key (Base64)
         #[arg(long)]
         my_priv: String,
+        /// Server Certificate SHA256 Hash (Hex) - Displayed on Server Startup
+        #[arg(long)]
+        server_cert_hash: String,
     },
     /// Generate a new Noise Keypair (and encrypt the private key)
     Keygen {
@@ -59,12 +62,17 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Install Rustls Crypto Provider (Ring)
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Server { safe_mode } => run_server(safe_mode).await?,
-        Commands::Connect { target, knock, local_port, server_pub, my_priv } => {
-            start_client(&target, &knock, local_port, &server_pub, &my_priv).await?;
+        Commands::Connect { target, knock, local_port, server_pub, my_priv, server_cert_hash } => {
+            start_client(&target, &knock, local_port, &server_pub, &my_priv, &server_cert_hash).await?;
         }
         Commands::Keygen { master_key } => {
             // Generate Keypair using Snow
@@ -82,10 +90,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("OPTION A: Are you setting up the SERVER?");
             println!("1. Copy 'Encrypted Private Key' to GhostPort.toml -> [security] -> encrypted_private_key");
             println!("2. Keep 'Public Key' safe; you will need to give it to your Clients.");
+            println!("3. Run the server to get the 'Server Certificate Hash' for clients.");
             println!("-------------------------------------------------------");
             println!("OPTION B: Are you setting up a CLIENT?");
             println!("1. Copy 'Public Key' to the Server's GhostPort.toml -> [[users]] -> public_key");
             println!("2. Use 'Raw Private Key' when running the 'connect' command.");
+            println!("3. Ask the Admin for the 'Server Certificate Hash'.");
             println!("-------------------------------------------------------");
             
             println!("\n>> Public Key:");

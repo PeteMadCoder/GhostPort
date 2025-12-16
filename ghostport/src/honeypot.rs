@@ -1,6 +1,5 @@
 use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use std::error::Error;
-use std::sync::Arc;
 use crate::config::Config;
 use crate::reporting::{send_alert, AlertLevel};
 use std::time::Duration;

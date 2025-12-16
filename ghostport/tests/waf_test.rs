@@ -25,3 +25,9 @@ fn test_clean_request() {
     let waf = WafEngine::new();
     assert!(waf.check_request("/home", "Host: example.com").is_none());
 }
+
+#[test]
+fn test_header_attack() {
+    let waf = WafEngine::new();
+    assert!(waf.check_request("/", "User-Agent: <script>").is_some());
+}

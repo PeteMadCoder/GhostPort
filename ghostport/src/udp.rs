@@ -48,10 +48,32 @@ pub async fn start_watcher(
                 };
 
                 // Attempt to read the handshake message
-                if let Ok(_) = noise.read_message(&buf[..size], &mut payload_buf) {
+                if let Ok(payload_len) = noise.read_message(&buf[..size], &mut payload_buf) {
                     if let Some(remote_static) = noise.get_remote_static() {
                         let pub_key_b64 = BASE64.encode(remote_static);
                         
+                        // 1. REPLAY CHECK (Timestamp)
+                        if payload_len != 8 {
+                            println!("Invalid Payload Length from {}", addr);
+                            jail.add_strike(addr.ip());
+                            continue;
+                        }
+                        
+                        let ts_bytes: [u8; 8] = payload_buf[..8].try_into().unwrap();
+                        let client_ts = u64::from_be_bytes(ts_bytes);
+                        
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+
+                        // Allow 30s window (clock skew + network lag)
+                        if client_ts > now + 30 || client_ts < now.saturating_sub(30) {
+                            println!("Replay Attack or Clock Skew Detected from {}. Client: {}, Server: {}", addr, client_ts, now);
+                            jail.add_strike(addr.ip());
+                            continue;
+                        }
+
                         if let Some((username, roles)) = auth.verify_key(&pub_key_b64) {
                             println!("Authorized Noise Session: {} [{}]", username, pub_key_b64);
                             

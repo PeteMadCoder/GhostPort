@@ -1,5 +1,5 @@
 use tokio::net::TcpStream;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -15,9 +15,7 @@ use quinn::{Endpoint, ServerConfig as QuinnServerConfig};
 
 use crate::config::Config;
 use crate::router::{match_route, RoutingDecision};
-use crate::reporting::{send_alert, AlertLevel};
 use crate::waf::WafEngine;
-use crate::honeypot::serve_honeypot;
 use crate::jail::Jail;
 
 // Constants
@@ -44,6 +42,10 @@ fn load_keys(path: &Path) -> Result<PrivateKeyDer<'static>, Box<dyn Error>> {
     }
 }
 
+use sha2::{Sha256, Digest};
+
+// ... existing imports ...
+
 pub async fn start_proxy(
     config: Config, 
     whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>>, 
@@ -59,6 +61,19 @@ pub async fn start_proxy(
     // 1. Setup QUIC Server Config
     let certs = load_certs(Path::new(&config.server.cert_path)).expect("Failed to load certs");
     let key = load_keys(Path::new(&config.server.key_path)).expect("Failed to load key");
+    
+    // --- PRINT CERT FINGERPRINT ---
+    if let Some(first_cert) = certs.first() {
+        let mut hasher = Sha256::new();
+        hasher.update(first_cert.as_ref());
+        let hash = hasher.finalize();
+        println!("----------------------------------------------------------");
+        println!("Server Certificate SHA256 Fingerprint:");
+        println!("{}", hex::encode(hash));
+        println!("(Use this for --server-cert-hash on the client)");
+        println!("----------------------------------------------------------");
+    }
+    // -----------------------------
     
     let mut crypto = rustls::ServerConfig::builder()
         .with_no_client_auth()
@@ -119,8 +134,8 @@ pub async fn start_proxy(
                 let jail_c = jail_clone.clone();
                 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_stream(send_stream, recv_stream, remote_addr, config_c, wl_c, waf_c, jail_c).await {
-                         // eprintln!("Stream Error: {}", e);
+                    if let Err(_e) = handle_stream(send_stream, recv_stream, remote_addr, config_c, wl_c, waf_c, jail_c).await {
+                         // eprintln!("Stream Error: {}", _e);
                     }
                 });
             }
@@ -139,9 +154,6 @@ async fn handle_stream(
 ) -> Result<(), Box<dyn Error>> 
 {
     // 1. Read Headers (Simple HTTP 1.0/1.1 parsing from the stream)
-    // Note: In a real QUIC HTTP/3 app, this would be H3 frames. 
-    // For this "Tunnel/Proxy", we treat the QUIC stream as a raw socket carrying HTTP text.
-    
     let mut buffer = [0u8; 4096];
     
     let n = match tokio::time::timeout(Duration::from_secs(HEADER_READ_TIMEOUT), recv_stream.read(&mut buffer)).await {
@@ -162,7 +174,7 @@ async fn handle_stream(
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 { return Err("Invalid Request Line".into()); }
     
-    let method = parts[0];
+    let _method = parts[0];
     let path = parts[1];
 
     // 2. AUTHENTICATION (Noise Session Check)

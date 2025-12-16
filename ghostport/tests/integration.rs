@@ -1,30 +1,31 @@
-use std::process::Command;
-use std::time::Duration;
-use std::thread;
+use ghostport::crypto::{encrypt_private_key, decrypt_private_key};
 
 #[test]
-#[ignore]
-fn test_server_startup() {
-    // 1. Start Server
-    let mut child = Command::new("cargo")
-        .arg("run")
-        .spawn()
-        .expect("Failed to spawn server");
+fn test_crypto_roundtrip() {
+    let master_key = "super_secret_password";
+    let original_priv_key = b"this is a 32 byte key for testing!!"; // 35 bytes actually, but fine
+    
+    // 1. Encrypt
+    let encrypted_b64 = encrypt_private_key(master_key, original_priv_key)
+        .expect("Encryption failed");
+    
+    assert_ne!(encrypted_b64, String::from_utf8_lossy(original_priv_key));
 
-    thread::sleep(Duration::from_secs(5));
+    // 2. Decrypt
+    let decrypted = decrypt_private_key(master_key, &encrypted_b64)
+        .expect("Decryption failed");
+        
+    assert_eq!(decrypted, original_priv_key);
+}
 
-    // 2. Check /admin (Should be unauthorized -> Honeypot -> 200 OK)
-    // We use -k for self-signed certs.
-    // We check if curl exits with 0 (success HTTP code if -f is used, but by default it returns 0 on 200 OK)
-    let status = Command::new("curl")
-        .arg("-k")
-        .arg("-f") // Fail on HTTP error codes (4xx/5xx)
-        .arg("https://127.0.0.1:8443/admin")
-        .status()
-        .expect("Failed to run curl");
-
-    // 3. Kill Server
-    let _ = child.kill();
-
-    assert!(status.success());
+#[test]
+fn test_crypto_wrong_password() {
+    let master_key = "correct_password";
+    let wrong_key = "wrong_password";
+    let original_priv_key = b"data";
+    
+    let encrypted = encrypt_private_key(master_key, original_priv_key).unwrap();
+    
+    let result = decrypt_private_key(wrong_key, &encrypted);
+    assert!(result.is_err());
 }

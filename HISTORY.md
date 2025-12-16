@@ -65,7 +65,7 @@ This document tracks the evolution of GhostPort, detailing the strategic shifts,
 
 ---
 
-## v5.0: The Stealth Bunker (Current)
+## v5.0: The Stealth Bunker
 **Goal:** A strategic pivot from a generic web proxy to a specialized, invisible gateway for critical internal infrastructure.
 
 ### The Paradigm Shift
@@ -89,3 +89,13 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
     *   **Removed Public Routes:** The `type="public"` config was removed. All routes are now strictly private.
     *   **Removed Strict WAF Toggle:** The WAF is now "Always On" and set to maximum strictness.
     *   **Updated Honeypot:** Replaced the generic login page with a "Secure Infrastructure Gateway" fake portal to better match the new use case.
+
+---
+
+## v5.1: Security Hardening (Current)
+**Goal:** Address critical vulnerabilities found in v5.0 audits and establish a rigorous testing baseline.
+
+### Key Features
+*   **Certificate Pinning:** Addressed a critical MITM vulnerability in the QUIC tunnel. The client now strictly verifies the server's certificate SHA256 fingerprint (`--server-cert-hash`) before sending data.
+*   **Timestamp Replay Protection:** Addressed a replay vulnerability in the Noise handshake. The UDP "Knock" now contains a signed timestamp, and the server rejects packets older than 30 seconds.
+*   **Comprehensive Test Suite:** Added `tests/e2e_system.rs` for full end-to-end regression testing (Server + Client + Backend + Keys + Config), along with unit tests for Jail, Router, and WAF.

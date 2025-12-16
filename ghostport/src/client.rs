@@ -1,28 +1,39 @@
 use snow::Builder;
-use tokio::net::{UdpSocket, TcpListener, TcpStream};
+use tokio::net::{UdpSocket, TcpListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use std::error::Error;
 use std::sync::Arc;
 use quinn::{ClientConfig, Endpoint, TransportConfig};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use sha2::{Sha256, Digest};
 
 static NOISE_PATTERN: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 
-// Skip certificate verification for the client (Self-signed)
+// Secure Certificate Pinner
 #[derive(Debug)]
-struct SkipServerVerification;
+struct PinServerVerification {
+    expected_hash: Vec<u8>,
+}
 
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
+impl rustls::client::danger::ServerCertVerifier for PinServerVerification {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
+        end_entity: &CertificateDer<'_>,
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+        let mut hasher = Sha256::new();
+        hasher.update(end_entity.as_ref());
+        let actual_hash = hasher.finalize();
+
+        if actual_hash.as_slice() == self.expected_hash.as_slice() {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General("Certificate Pinning Mismatch".into()))
+        }
     }
 
     fn verify_tls12_signature(
@@ -58,9 +69,14 @@ pub async fn start_client(
     knock_addr: &str,  // IP:Port of GhostPort Watcher (UDP)
     local_port: u16,   // Local TCP port to bind (e.g., 2222)
     server_pub_key_b64: &str,
-    my_priv_key_b64: &str
+    my_priv_key_b64: &str,
+    server_cert_hash_hex: &str // New Arg
 ) -> Result<(), Box<dyn Error>> {
     
+    // Parse Hash
+    let expected_hash = hex::decode(server_cert_hash_hex)
+        .map_err(|_| "Invalid Server Cert Hash (Hex)")?;
+
     // 1. Send the Knock (Noise Auth)
     println!("Initiating Noise Handshake with {}...", knock_addr);
     send_knock(knock_addr, server_pub_key_b64, my_priv_key_b64).await?;
@@ -72,16 +88,13 @@ pub async fn start_client(
     println!("You can now connect via: ssh -p {} user@localhost", local_port);
 
     // 3. Configure QUIC Client
-    let mut roots = rustls::RootCertStore::empty();
-    // We can add system roots here if needed, but we are using a self-signed verifier anyway.
-
+    let roots = rustls::RootCertStore::empty();
     let mut crypto = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
     
-    // Dangerous: Disable cert verification because we use self-signed certs for the tunnel
-    // In production, you might want to pin the cert digest instead.
-    crypto.dangerous().set_certificate_verifier(Arc::new(SkipServerVerification));
+    // Install Pinner
+    crypto.dangerous().set_certificate_verifier(Arc::new(PinServerVerification { expected_hash }));
     crypto.alpn_protocols = vec![b"hq-29".to_vec()];
 
     let mut client_config = ClientConfig::new(Arc::new(
@@ -101,10 +114,24 @@ pub async fn start_client(
 
         // Connect to GhostPort via QUIC
         let addr = target_addr.parse().expect("Invalid Target Address");
-        let connection = endpoint.connect(addr, "localhost")?.await?;
+        
+        // Connect with implicit verification via Pinner
+        let connection = match endpoint.connect(addr, "localhost")?.await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to connect (Cert Pinning Failed?): {}", e);
+                continue;
+            }
+        };
         
         // Open a Bi-directional stream
-        let (mut send_stream, mut recv_stream) = connection.open_bi().await?;
+        let (mut send_stream, mut recv_stream) = match connection.open_bi().await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to open stream: {}", e);
+                continue;
+            }
+        };
 
         // Spawn Tunnel Logic
         tokio::spawn(async move {
@@ -156,8 +183,14 @@ pub async fn send_knock(
         .remote_public_key(&server_pub)
         .build_initiator()?;
 
+    // PAYLOAD: Current Timestamp (8 bytes) to prevent Replay Attacks
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let payload = now.to_be_bytes();
+
     let mut buf = [0u8; 65535];
-    let len = noise.write_message(&[], &mut buf)?;
+    let len = noise.write_message(&payload, &mut buf)?;
 
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     socket.send_to(&buf[..len], server_addr).await?;

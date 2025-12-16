@@ -10,11 +10,6 @@ pub mod auth;
 pub mod crypto;
 pub mod client;
 
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-use std::net::IpAddr;
-use std::time::Instant;
-use std::error::Error;
 
 // Re-export key functions for main.rs
 pub use config::load_config;
