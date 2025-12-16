@@ -9,32 +9,38 @@ const DEFAULT_HTML: &str = r#"
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Admin Login</title>
+    <title>Secure Gateway Access</title>
     <style>
-        body { font-family: sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
-        .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 300px; }
-        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; }
-        button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        body { background-color: #2b2b2b; color: #e0e0e0; font-family: 'Courier New', Courier, monospace; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .container { border: 1px solid #444; padding: 2rem; background: #333; width: 400px; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        h2 { text-align: center; margin-bottom: 1.5rem; color: #fff; }
+        .input-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; }
+        input { width: 100%; padding: 0.5rem; background: #444; border: 1px solid #555; color: white; box-sizing: border-box; }
+        button { width: 100%; padding: 0.7rem; background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 1rem; }
         button:hover { background: #0056b3; }
-        .error { color: red; font-size: 0.9em; display: none; margin-top: 10px; }
+        .banner { font-size: 0.8rem; color: #888; margin-top: 2rem; text-align: center; border-top: 1px solid #444; padding-top: 1rem; }
     </style>
 </head>
 <body>
-    <div class="login-box">
-        <h2 style="text-align: center; color: #333;">Administration</h2>
-        <form method="POST" action="/login_check">
-            <input type="text" name="username" placeholder="Username" required>
-            <input type="password" name="password" placeholder="Password" required>
-            <button type="submit">Sign In</button>
-            <div class="error" id="err">Invalid credentials</div>
+    <div class="container">
+        <h2>Secure Infrastructure Gateway</h2>
+        <form method="POST" action="/auth/v1/session">
+            <div class="input-group">
+                <label>Identity Key</label>
+                <input type="text" name="key" required>
+            </div>
+            <div class="input-group">
+                <label>Passphrase</label>
+                <input type="password" name="passphrase" required>
+            </div>
+            <button type="submit">Authenticate</button>
         </form>
+        <div class="banner">
+            UNAUTHORIZED ACCESS IS PROHIBITED.<br>
+            ALL ACTIVITY IS LOGGED AND MONITORED.
+        </div>
     </div>
-    <script>
-        document.querySelector('form').onsubmit = function(e) {
-            // We let the form submit naturally so the POST request hits our server again
-            // which allows us to capture the password in the logs above.
-        };
-    </script>
 </body>
 </html>
 "#;

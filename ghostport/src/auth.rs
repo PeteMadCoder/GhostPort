@@ -11,9 +11,7 @@ impl AuthManager {
         let mut users = HashMap::new();
         
         for u in user_configs {
-            if let Some(pub_key) = &u.public_key {
-                users.insert(pub_key.clone(), (u.username.clone(), u.roles.clone()));
-            }
+            users.insert(u.public_key.clone(), (u.username.clone(), u.roles.clone()));
         }
 
         AuthManager {

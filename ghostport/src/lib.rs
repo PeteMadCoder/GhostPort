@@ -8,7 +8,7 @@ pub mod honeypot;
 pub mod jail;
 pub mod auth;
 pub mod crypto;
-pub mod knocker;
+pub mod client;
 
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;

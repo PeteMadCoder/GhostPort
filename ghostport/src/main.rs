@@ -4,7 +4,7 @@ use ghostport::proxy::start_proxy;
 use ghostport::waf::WafEngine;
 use ghostport::jail::Jail;
 use ghostport::auth::AuthManager;
-use ghostport::knocker::send_knock;
+use ghostport::client::start_client;
 use ghostport::crypto::encrypt_private_key;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 #[derive(Parser)]
 #[command(name = "ghostport")]
-#[command(version = "3.0", about = "Zero-Trust Identity Aware Proxy")]
+#[command(version = "5.0", about = "Zero-Trust Stealth Bunker")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -26,12 +26,22 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Start the GhostPort Server
-    Server,
-    /// Send a 'Knock' packet to open a session
-    Knock {
-        /// Server Address (IP:Port)
+    Server {
+        /// Safe Mode: Binds only to 127.0.0.1 for debugging
         #[arg(long)]
-        server: String,
+        safe_mode: bool,
+    },
+    /// Connect to a GhostPort Server (Creates Local Tunnel)
+    Connect {
+        /// Target Address (IP:Port of the Service, e.g., 1.2.3.4:8443)
+        #[arg(long)]
+        target: String,
+        /// Knock Address (IP:Port of the Watcher, e.g., 1.2.3.4:9000)
+        #[arg(long)]
+        knock: String,
+        /// Local Port to bind (e.g., 2222)
+        #[arg(long, default_value_t = 2222)]
+        local_port: u16,
         /// Server's Public Key (Base64)
         #[arg(long)]
         server_pub: String,
@@ -52,9 +62,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server => run_server().await?,
-        Commands::Knock { server, server_pub, my_priv } => {
-            send_knock(&server, &server_pub, &my_priv).await?;
+        Commands::Server { safe_mode } => run_server(safe_mode).await?,
+        Commands::Connect { target, knock, local_port, server_pub, my_priv } => {
+            start_client(&target, &knock, local_port, &server_pub, &my_priv).await?;
         }
         Commands::Keygen { master_key } => {
             // Generate Keypair using Snow
@@ -75,7 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("-------------------------------------------------------");
             println!("OPTION B: Are you setting up a CLIENT?");
             println!("1. Copy 'Public Key' to the Server's GhostPort.toml -> [[users]] -> public_key");
-            println!("2. Use 'Raw Private Key' when running the 'knock' command.");
+            println!("2. Use 'Raw Private Key' when running the 'connect' command.");
             println!("-------------------------------------------------------");
             
             println!("\n>> Public Key:");
@@ -93,17 +103,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn run_server() -> Result<(), Box<dyn Error>> {
-    println!("GhostPort v3.0 Starting...");
+async fn run_server(safe_mode: bool) -> Result<(), Box<dyn Error>> {
+    println!("GhostPort v5.0 Starting...");
 
     // 1. Load Config
-    let config = match load_config("GhostPort.toml") {
+    let mut config = match load_config("GhostPort.toml") {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to load configuration: {}", e);
             return Ok(());
         }
     };
+
+    if safe_mode {
+        println!("!!! SAFE MODE ACTIVE !!!");
+        println!("Overriding Listen IP to 127.0.0.1. External access is disabled.");
+        config.server.listen_ip = "127.0.0.1".to_string();
+    }
 
     println!("Configuration Loaded!");
     println!("   Listen: {}:{}", config.server.listen_ip, config.server.listen_port);

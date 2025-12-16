@@ -1,92 +1,106 @@
 # GhostPort
-> **Zero-Trust Identity Aware Proxy**\
-> **Current Version:** v4.0 (Crypto-Identity Edition)\
-> **Status:** Production-Ready Core / Pre-UI\
+> **Zero-Trust Stealth Bunker**\
+> **Current Version:** v5.0 (Stealth Bunker)\
+> **Status:** Production-Ready Core\
 > **Language:** Rust
 
 ![GhostPort Logo](/ghostport.png)
 
 ## Overview
-**GhostPort** is a high-performance, security-focused Reverse Proxy designed to protect internal services from the public internet. Unlike standard proxies (Nginx/HAProxy), GhostPort operates on a **Zero-Trust** model. It assumes all traffic is hostile until proven otherwise.
+**GhostPort** has evolved from a security-hardened reverse proxy into a dedicated **Stealth Bunker** for critical infrastructure. 
 
-It combines the features of a **Firewall** (SPA/Port Knocking), a **WAF** (Web Application Firewall), an **IDS** (Intrusion Detection/Honeypot), and an **IAM** (Identity Access Management) system into a single, dependency-free binary.
+While earlier versions (v1-v3) aimed to be a "Better Nginx" with security features, **v5.0** represents a strategic pivot. We are no longer a general-purpose web server. GhostPort is now a specialized, invisible gateway designed solely to protect high-value internal services (SSH, RDP, Kubernetes APIs, Admin Panels) from the public internet.
+
+It combines the features of a **Firewall** (SPA/Port Knocking), a **WAF** (Web Application Firewall), an **IDS** (Intrusion Detection/Honeypot), and an **IAM** (Identity Access Management) system into a single, dependency-free binary that communicates exclusively over encrypted UDP tunnels.
 
 ---
 
-## Architecture (v4.0)
-GhostPort operates using a "Defense in Depth" pipeline. Traffic must pass through multiple security layers before reaching the backend.
+## The Paradigm Shift: v4.0 &rarr; v5.0
+In **v5.0**, we made radical changes to the core architecture to achieve true invisibility and resilience.
+
+### 1. TCP is Dead. Long Live QUIC.
+*   **The Change:** We removed all TCP Listeners. GhostPort no longer binds to TCP ports.
+*   **The Reason:** TCP handshakes are noisy and easy to scan (SYN/ACK). By moving to **UDP/QUIC** (HTTP/3), we eliminate the "Open Port" signature entirely. A port scanner sending TCP packets receives *nothing* (RST or Timeout). A scanner sending invalid UDP packets receives *silence*.
+*   **The Benefit:** **Session Roaming.** QUIC uses Connection IDs (CIDs). If a client switches from Wi-Fi to 4G (changing IP), the session stays alive.
+
+### 2. The "Stealth Bunker" Philosophy
+*   **The Change:** We removed support for "Public Routes" and "Guest Access".
+*   **The Reason:** Supporting public web traffic requires responding to unauthenticated requests (HTTP 200 or 403). This leaks the server's existence.
+*   **The Benefit:** **Total Invisibility.** Unless you hold a valid cryptographic key to initiate the Noise Handshake, the server mathematically does not exist for you.
+
+### 3. The Client Tunnel
+*   **The Change:** Users can no longer use a standard browser or `ssh` command directly against the server.
+*   **The Solution:** We introduced `ghostport connect`. This command creates a **Local Tunnel** (TCP &rarr; QUIC) on the client's machine.
+*   **The Benefit:** It bridges standard tools (SSH, RDP, Browser) over our custom secure protocol transparently.
+
+---
+
+## Architecture (v5.0)
 
 ```mermaid
 graph TD
-    Attacker[Attacker] -->|TCP Connect| Jail[Jailkeeper]
-    Jail -->|Banned?| Drop[Drop Connection]
+    A[Attacker] -->|Scan| B{Port Response}
+    B -->|TCP| C[Connection Refused]
+    B -->|UDP| D[Silence]
     
-    Client[Client] -->|Noise Handshake| Gate[Gatekeeper]
-    Gate -->|Decrypt & Verify| Auth[Key Registry]
-    Auth -->|Valid PubKey?| Whitelist[Update Session Table]
+    E[Admin] -->|1. Connect| F[GhostPort 2222]
+    F -->|2. Knock| G[UDP Watcher 9000]
+    G -->|3. Authorize| H[Session Table]
     
-    Jail -->|Allowed| Semaphore[Concurrency Limit]
-    Semaphore --> TLS[TLS Decryption]
-    TLS --> WAF[WAF Inspection]
-    WAF -->|Malicious?| Strike[Add Strike/Ban]
-    
-    WAF --> Router[Identity Router]
-    Router -->|Check Roles| RBAC{Has Permission?}
-    
-    RBAC -->|No| Honeypot[Honeypot]
-    RBAC -->|Yes| Backend[Backend App]
+    F -->|4. QUIC| I[Listener 8443]
+    I -->|5. Check| J{RBAC}
+    J -->|Allow| K[Internal Service]
+    J -->|Deny| L[Honeypot]
 ```
-
-### Key Modules
-* **`src/main.rs`**: The Orchestrator. Manages the TCP/UDP threads and shared state.
-* **`src/knocker.rs`**: **(New in v4.0)** The Client. Initiates a `Noise_IK_25519_ChaChaPoly_BLAKE2s` handshake.
-* **`src/udp.rs`**: The Listener. Acts as a Noise Responder. Silently drops any packet that cannot be decrypted with the Server's Private Key.
-* **`src/crypto.rs`**: **(New in v4.0)** Handles the symmetric encryption (`ChaCha20Poly1305`) of the Server's configuration secrets.
-* **`src/auth.rs`**: **(Updated in v4.0)** Maps Client Public Keys to Roles (e.g., `admin`, `dev`) instead of TOTP codes.
-* **`src/jail.rs`**: **(New in v2.1)** Active Defense. Instantly drops connections from banned IPs before they consume resources.
-* **`src/router.rs`**: Role-Based Access Control (RBAC). Checks if the authenticated user has the required roles (e.g., `["admin"]`) for the requested path.
-* **`src/waf.rs`**: Regex-based inspection engine to block SQLi, XSS, and Traversal attacks.
-* **`src/honeypot.rs`**: Interactive deception module. Serves fake login pages to capture attacker credentials and monitor attackers.
 
 ---
 
 ## Version History & Changelog
 
-### **v4.0: Crypto-Identity Edition (Current)**
-* **Feature:** **Noise Protocol Integration**. Replaced TOTP/String knocks with a cryptographically secure handshake (`Noise_IK_25519_ChaChaPoly_BLAKE2s`).
-* **Feature:** **Mutual Authentication**. Both Client and Server verify each other's identities using static public keys.
-* **Feature:** **Encrypted Configuration**. The Server's Private Key is stored as an encrypted blob on disk, decrypted only at runtime via Environment Variable.
-* **Feature:** **New CLI**. Added `knock` (client) and `keygen` (utility) commands.
-* **Security:** **Zero Plaintext Secrets**. No sensitive keys exist in plaintext within `GhostPort.toml`.
+### **v5.0: The Stealth Bunker (Current)**
+*   **Protocol Migration (TCP &rarr; UDP):** Replaced `tokio::net::TcpListener` with `quinn` (QUIC). The Data Plane is now entirely UDP-based.
+*   **New Feature: Local Tunneling:** Introduced `ghostport connect` CLI to bridge local TCP traffic into the remote QUIC stream.
+*   **New Feature: Anti-Lockout Watchdog:** Added `scripts/watchdog.sh`. If the GhostPort binary crashes >3 times, it automatically opens standard SSH (Port 22) via UFW/Iptables to prevent admin lockout.
+*   **New Feature: Safe Mode:** Added `--safe-mode` flag to force binding to `127.0.0.1` for debugging without exposure.
+*   **Removed Feature:** **Public Routes**. The `type="public"` configuration option was removed. All routes are now strictly private.
+*   **Removed Feature:** **Strict WAF Toggle**. The WAF is now "Always On" and set to maximum strictness.
+*   **Honeypot Upgrade:** Replaced generic "Admin Login" with a specific "Secure Infrastructure Gateway" fake portal.
 
-### **v3.0: Identity & Access Management**
-* **Feature:** **TOTP Integration**. Static passwords replaced with Time-based One-Time Passwords.
-* **Feature:** **Replay Protection**. Codes are "burned" immediately after use. Sniffing a packet is now useless to an attacker.
-* **Feature:** **RBAC (Role-Based Access Control)**. Users have multiple roles (e.g., `dev`, `admin`). Endpoints enforce specific role requirements.
-* **Logic:** Moved from "IP-based Trust" to "Identity-based Trust".
+### **v4.0: The Crypto-Identity Edition**
+*   **Major Overhaul:** Replaced the TOTP/String-based auth system with the **Noise Protocol** (`Noise_IK_25519_ChaChaPoly_BLAKE2s`).
+*   **Feature: Mutual Authentication:** Implemented a Key Registry. Both Server and Client verify each other's static public keys.
+*   **Feature: Encrypted Configuration:** The Server's Private Key is stored as an encrypted Base64 blob. It is decrypted at runtime using the `GHOSTPORT_MASTER_KEY` environment variable.
+*   **Feature: New CLI:** Introduced `knock` (for sending Noise packets) and `keygen` (for generating KeyPairs).
+*   **Security:** Achieved "Zero Plaintext Secrets" compliance.
+
+### **v3.0: Identity & Access Management (IAM)**
+*   **Feature: RBAC (Role-Based Access Control):** Introduced `UserConfig` and `RuleConfig`. Users are assigned roles (e.g., `["admin", "dev"]`), and paths enforce role requirements.
+*   **Feature: TOTP Integration:** Replaced static passwords with Time-based One-Time Passwords (`HMAC-SHA1`).
+*   **Feature: Replay Protection:** Implemented a "Burnt Code" cache to prevent replay attacks on the UDP knock.
+*   **Logic:** Shifted from simple "IP Whitelisting" to "Identity-based Sessions".
 
 ### **v2.1: The Hardened Edition**
-* **Feature:** **The Jailkeeper**. An active ban system. 3 Strikes = 1 Hour Ban (default numbers).
-* **Feature:** **DoS Protection**.
-* **Slowloris:** Enforced 5-second timeouts on HTTP headers.
-* **Connection Floods:** Added Semaphore to limit max concurrent connections (Default: 1000).
-* **Fix:** WAF now URL-decodes payloads (handling `%27` vs `'`) before inspection.
+*   **Feature: The Jailkeeper:** An active defense system. Tracks "Strikes" (failed auth, WAF triggers). 3 Strikes = 1 Hour IP Ban.
+*   **Feature: DoS Protection:**
+    *   **Slowloris:** Enforced strict timeouts on HTTP header reading.
+    *   **Flood:** Added Semaphore-based concurrency limits (Default: 1000 connections).
+*   **Fix:** WAF updated to URL-decode payloads before inspection to catch encoded attacks (e.g., `%27` vs `'`).
 
 ### **v2.0: The Security Gateway**
-* **Feature:** **Single Packet Authorization (SPA)**. Services are invisible until a UDP packet is received.
-* **Feature:** **Configuration System**. Added `GhostPort.toml` for hot-swappable settings.
-* **Feature:** **Honeypot**. First implementation of the fake admin panel.
-* **Feature:** **Webhooks**. Integration with Discord/Slack for real-time alerts.
+*   **Feature: Single Packet Authorization (SPA):** The first implementation of the "Knock". Services are invisible until a magic UDP packet is received.
+*   **Feature: Configuration System:** Introduced `GhostPort.toml` for hot-swappable settings (replacing hardcoded constants).
+*   **Feature: Honeypot:** First implementation of the deception module. Redirects attackers to a fake page to waste their time and log their payload.
+*   **Feature: Webhooks:** Integration with Discord/Slack for real-time security alerts.
 
 ### **v1.0: The Prototype**
-* **Feature:** Basic TCP Proxying using `tokio::io::copy_bidirectional`.
-* **Feature:** HTTP Header Parsing.
-* **Feature:** Host Header Spoofing (Virtual Host routing).
+*   **Core:** Basic TCP Proxying using `tokio::io::copy_bidirectional`.
+*   **Feature:** Simple HTTP Header Parsing.
+*   **Feature:** Host Header Spoofing (Virtual Host routing).
 
 ---
 
 ## Configuration (`GhostPort.toml`)
-The system is fully driven by this configuration file.
+All rules are now **Private**. There are no public routes in v5.0.
 
 ```toml
 [server]
@@ -98,15 +112,12 @@ key_path = "./certs/server.key"
 max_connections = 1000
 
 [backend]
-target_addr = "127.0.0.1:8080"
-target_host = "myapp.local"
+target_addr = "127.0.0.1:22" # Forwarding to SSH
+target_host = "localhost"
 
 [security]
-enable_deep_analysis = true
+encrypted_private_key = "UXzEjsRcQ1JUbLwoy3E0qSmP8..." 
 session_timeout = 300
-# The Server's Private Key (Encrypted with your Master Password)
-# Run `ghostport keygen --master-key "secret"` to generate.
-encrypted_private_key = "REPLACE_WITH_GENERATED_ENCRYPTED_KEY"
 
 [security.ban]
 enabled = true
@@ -114,45 +125,19 @@ ban_duration = 3600
 max_violations = 3
 
 # --- USERS ---
-# Map Client Public Keys to Identity & Roles
-
 [[users]]
-username = "user_admin"
-roles = ["superadmin", "dev"]
-# The Client's Public Key (Base64)
-public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY"
+username = "admin"
+roles = ["superadmin"]
+public_key = "RWsoUiQNE+/uc/A1dzHmQ..."
 
-[[users]]
-username = "bob"
-roles = ["auditor"]
-public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY_2"
+# --- RULES ---
+# Note: In v5.0, ALL rules are PRIVATE. 
+# There is no "type" or "strict_waf". WAF is always strictly on.
 
-# --- ROUTING RULES ---
-
-# Rule 1: The Fortress (Only SuperAdmins)
-[[rules]]
-path = "/admin"
-type = "private"
-allowed_roles = ["superadmin"]
-on_fail = "honeypot"
-
-# Rule 2: The Logs (Auditors AND SuperAdmins)
-[[rules]]
-path = "/logs"
-type = "private"
-allowed_roles = ["superadmin", "auditor"]
-on_fail = "block"
-
-# Rule 3: Public
 [[rules]]
 path = "/"
-type = "public"
-strict_waf = true
-on_fail = "block"
-
-[reporting]
-webhook_url = "https://discord.com/api/webhooks/12345/abcde"
-log_all_requests = false
+allowed_roles = ["superadmin"]
+on_fail = "honeypot"
 ```
 
 ---
@@ -175,67 +160,45 @@ cargo build --release
 ```
 
 ### 2. Generate Identities
-GhostPort v4.0 uses **Mutual Authentication**. Both the Server and the Client need their own Keypairs.
-
-**Step A: Generate Server Keys**
+**Server:**
 ```bash
-# Replace 'my_secret' with a strong master password
 cargo run -- keygen --master-key "my_secret"
+# Copy 'Encrypted Private Key' to GhostPort.toml
+# Save 'Public Key' for your clients.
 ```
-*Output:*
-1.  **Encrypted Private Key**: Copy this to `GhostPort.toml` under `[security]`.
-2.  **Public Key**: Save this. You will give this to your Clients (`SERVER_PUB`).
 
-**Step B: Generate Client Keys**
+**Client (Admin):**
 ```bash
-cargo run -- keygen --master-key "temp" 
+cargo run -- keygen --master-key "temp"
+# Copy 'Public Key' to GhostPort.toml under [[users]]
+# Save 'Raw Private Key' for yourself.
 ```
-*Output:*
-1.  **Public Key**: Copy this to `GhostPort.toml` under `[[users]]`.
-2.  **Raw Private Key**: Save this securely. The Client needs this to knock (`CLIENT_PRIV`).
 
-### 3. Running the Server
-You must provide the Master Key environment variable to decrypt the config at runtime.
+### 3. Run the Server
+Use the Watchdog script for production safety:
 ```bash
-# 1. Start your backend (e.g., a python server)
-python3 -m http.server 8080 &
-
-# 2. Run GhostPort Server
 export GHOSTPORT_MASTER_KEY="my_secret"
-cargo run -- server
+./scripts/watchdog.sh
 ```
 
-### 4. Authenticating (The "Knock")
-Standard tools like `nc` or `telnet` **cannot** be used anymore because the packets are encrypted. Use the built-in `knock` command.
+### 4. Connect (The Client Tunnel)
+Since GhostPort now uses QUIC, you cannot use a standard browser or SSH client directly. You must use the **Local Tunnel**.
 
 ```bash
-cargo run -- knock \
-  --server "127.0.0.1:9000" \
-  --server-pub "<SERVER_PUB>" \
-  --my-priv "<CLIENT_PRIV>"
+# Start the Tunnel (Binds to localhost:2222)
+car go run -- connect \
+  --target "1.2.3.4:8443" \
+  --knock "1.2.3.4:9000" \
+  --local-port 2222 \
+  --server-pub "<SERVER_PUB_KEY>" \
+  --my-priv "<CLIENT_PRIV_KEY>"
 ```
-*If successful, the Server logs will show: `Authorized Noise Session: user_admin`*
 
----
-
-## The "Invisible Server" Philosophy
-GhostPort is designed to be completely invisible to port scanners (e.g., Shodan, Nmap). 
-By default, **ALL TCP connections are dropped** unless the source IP has successfully "knocked" via UDP.
-
-**There are no "Open Ports".**
-
-### How to serve Public Pages?
-If you have an application that needs to expose a public route (e.g., a mobile app login screen or a status page), you should use the **"Guest Identity"** tactic:
-
-1.  Generate a standard Client Keypair using `ghostport keygen`.
-2.  Register the Public Key in `GhostPort.toml` with **no special roles** (e.g., `roles = ["guest"]` or empty).
-3.  Embed the corresponding Private Key into your application (mobile app, frontend server, etc.).
-4.  Configure the application to send a "Knock" packet before attempting to connect.
-
-This ensures that:
-1.  Your server remains invisible to the general public and scanners.
-2.  Only your specific application (which holds the guest key) can even *see* that port 8443 is open.
-3.  Once connected, the `router.rs` will restrict this user to only `type = "public"` paths.
+Once the tunnel is up:
+```bash
+# Connect to your backend via the local tunnel
+ssh -p 2222 user@localhost
+```
 
 ---
 

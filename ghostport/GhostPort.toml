@@ -1,5 +1,5 @@
 # ==========================================
-# GHOSTPORT CONFIGURATION v4.0 (Noise + RBAC)
+# GHOSTPORT CONFIGURATION v5.0 (Stealth Bunker)
 # ==========================================
 
 [server]
@@ -23,9 +23,6 @@ session_timeout = 300
 encrypted_private_key = "i0KicWePaJUgdco66BGANMsDJAXoAYjuvPVHrZYjT98I0RUPbkz1p1+31/VgDWONGAyZFoRc6l2s/L+b"
 # Server's public_key = RnYhLaORiMPZ+IIufaaooSxl/Nb1vXTlVz17FnxmljY=
 
-# Optional: List of authorized Client Public Keys (if not using [[users]] list)
-# authorized_keys = []
-
 [security.ban]
 enabled = true
 ban_duration = 3600
@@ -35,37 +32,36 @@ max_violations = 3
 # Map Client Public Keys to Identity & Roles
 
 [[users]]
-username = "user_admin"
+username = "admin"
 roles = ["superadmin", "dev"] 
 # The Client's Public Key (Base64)
-public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY"
+public_key = "RWsoUiQNE+/uc/A1dzHmQFueacUDwXnjlYFwHq/rASY="
 
 [[users]]
-username = "bob"
+username = "auditor"
 roles = ["auditor"]
-public_key = "REPLACE_WITH_CLIENT_PUBLIC_KEY_2"
+public_key = "REPLACE_WITH_AUDITOR_PUBLIC_KEY"
 
 # --- RULES ---
+# Note: In v5.0, ALL rules are PRIVATE. 
+# There is no "type" or "strict_waf". WAF is always strictly on.
 
 # Rule 1: The Fortress (Only SuperAdmins)
 [[rules]]
 path = "/admin"
-type = "private"
 allowed_roles = ["superadmin"] 
 on_fail = "honeypot"
 
 # Rule 2: The Logs (Auditors AND SuperAdmins)
 [[rules]]
 path = "/logs"
-type = "private"
 allowed_roles = ["superadmin", "auditor"]
 on_fail = "block"
 
-# Rule 3: Public
+# Rule 3: General Access (All authenticated users)
 [[rules]]
 path = "/"
-type = "public"
-strict_waf = true
+# No allowed_roles = Anyone with a valid Noise session
 on_fail = "block"
 
 [reporting]

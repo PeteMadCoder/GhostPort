@@ -68,9 +68,6 @@ pub struct ReportingConfig {
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct RuleConfig {
     pub path: String,
-    #[serde(rename = "type")]
-    pub rule_type: String,
-    pub strict_waf: Option<bool>,
     pub on_fail: String,
     pub allowed_roles: Option<Vec<String>>,
 }
@@ -79,7 +76,7 @@ pub struct RuleConfig {
 pub struct UserConfig {
     pub username: String,
     pub roles: Vec<String>,
-    pub public_key: Option<String>,
+    pub public_key: String,
 }
 
 pub fn load_config(path: &str) -> Result<Config, Box<dyn Error>> {
