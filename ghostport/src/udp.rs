@@ -36,6 +36,12 @@ pub async fn start_watcher(
     loop {
         match socket.recv_from(&mut buf).await {
             Ok((size, addr)) => {
+                // 0. PRE-AUTH CHECK (DoS Protection)
+                if !jail.check_ip(addr.ip()) {
+                    // Silent Drop
+                    continue;
+                }
+
                 // Initialize Noise Responder for each packet
                 let builder = Builder::new(NOISE_PATTERN.parse().unwrap());
                 let mut noise = match builder.local_private_key(&server_private_key).build_responder() {

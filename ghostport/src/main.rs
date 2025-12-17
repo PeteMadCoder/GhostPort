@@ -9,14 +9,14 @@ use ghostport::crypto::encrypt_private_key;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use clap::{Parser, Subcommand};
 use snow::Builder;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 #[derive(Parser)]
 #[command(name = "ghostport")]
-#[command(version = "5.0", about = "Zero-Trust Stealth Bunker")]
+#[command(version = "5.3", about = "Zero-Trust Stealth Bunker")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -206,8 +206,41 @@ async fn run_server(safe_mode: bool) -> Result<(), Box<dyn Error>> {
     // Pass the raw private key
     tokio::spawn(start_watcher(udp_config, server_private_key, udp_sessions, udp_auth, udp_jail));
 
-    // 7. Start TCP Proxy (Main Thread)
+    // 7. Start Housekeeper (Background)
+    let hk_sessions = session_store.clone();
+    let hk_jail = jail.clone();
+    let hk_timeout = config.security.session_timeout;
+    tokio::spawn(start_housekeeper(hk_sessions, hk_jail, hk_timeout));
+
+    // 8. Start TCP Proxy (Main Thread)
     start_proxy(config, session_store, waf, jail).await;
 
     Ok(())
+}
+
+async fn start_housekeeper(
+    session_store: Arc<Mutex<HashMap<[u8; 32], (Instant, Vec<String>)>>>,
+    jail: Jail,
+    timeout_secs: u64
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        
+        // 1. Clean Expired Tokens (VULN-002)
+        {
+            if let Ok(mut store) = session_store.lock() {
+                let timeout = Duration::from_secs(timeout_secs);
+                let before = store.len();
+                store.retain(|_, (ts, _)| ts.elapsed() < timeout);
+                let after = store.len();
+                if before != after {
+                    // println!("Housekeeper: Removed {} expired tokens.", before - after);
+                }
+            }
+        }
+
+        // 2. Clean Expired Bans (VULN-003)
+        jail.cleanup();
+    }
 }

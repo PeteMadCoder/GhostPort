@@ -68,4 +68,12 @@ impl Jail {
         state.strikes.remove(&ip);
         println!("INSTANT BAN: IP {}", ip);
     }
+
+    /// Removes expired bans to prevent memory leaks.
+    pub fn cleanup(&self) {
+        let mut state = self.state.write().unwrap();
+        let now = Instant::now();
+        // Retain only bans that are in the future
+        state.banned_ips.retain(|_, expiry| *expiry > now);
+    }
 }

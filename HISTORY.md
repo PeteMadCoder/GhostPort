@@ -120,3 +120,13 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 
 ### Testing
 *   **Negative Testing:** Added regression tests for Certificate Pinning failures and Replay Attacks to ensure security controls are active.
+
+---
+
+## v5.3: DoS Resilience (Current)
+**Goal:** Address Critical Denial-of-Service vulnerabilities identified in the 5.2 security audit.
+
+### Security Fixes
+*   **VULN-001 (UDP CPU Exhaustion):** Implemented a "Pre-Auth IP Check". The UDP Watcher now checks if an IP is banned **before** attempting to process/decrypt the Noise handshake. This prevents banned IPs from exhausting server CPU with garbage packets.
+*   **VULN-002 (Token Leak):** Implemented a "Housekeeper" background task that periodically scans the Session Store and removes expired tokens to prevent memory exhaustion.
+*   **VULN-003 (Jail Leak):** The Housekeeper now also cleans up expired bans from the Jail memory, preventing infinite growth of the ban list.

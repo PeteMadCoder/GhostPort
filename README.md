@@ -1,6 +1,6 @@
 # GhostPort
 > **Zero-Trust Stealth Bunker**\
-> **Current Version:** v5.2 (Hardened Core + Client Profiles)\
+> **Current Version:** v5.3 (DoS Resilient + Hardened Core)\
 > **Status:** Production-Ready\
 > **Language:** Rust
 
@@ -17,6 +17,9 @@
 graph TD
     subgraph "Phase 1: Authorization (UDP)"
         A[Client] -->|1. Encrypted Knock + Session Token| B[UDP Watcher :9000]
+        B -->|1a. Pre-Auth IP Check| J{Banned?}
+        J -->|Yes| K[Drop Packet]
+        J -->|No| B
         B -->|2. Verify Key & Timestamp| C[Token Store]
         B -->|3. Store Valid Token| C
     end
