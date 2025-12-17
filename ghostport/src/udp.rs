@@ -1,7 +1,6 @@
 use tokio::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::time::Instant;
 use crate::config::Config;
 use crate::reporting::{send_alert, AlertLevel};
@@ -15,16 +14,16 @@ static NOISE_PATTERN: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 pub async fn start_watcher(
     config: Config, 
     server_private_key: Vec<u8>,
-    whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>>,
+    session_store: Arc<Mutex<HashMap<[u8; 32], (Instant, Vec<String>)>>>,
     auth: Arc<AuthManager>,
     jail: Jail
 ) {
-    let knock_addr = "0.0.0.0:9000"; 
+    let knock_addr = format!("0.0.0.0:{}", config.server.knock_port); 
 
-    let socket = match UdpSocket::bind(knock_addr).await {
+    let socket = match UdpSocket::bind(&knock_addr).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Failed to bind UDP Watcher: {}", e);
+            eprintln!("Failed to bind UDP Watcher at {}: {}", knock_addr, e);
             return;
         }
     };
@@ -52,14 +51,15 @@ pub async fn start_watcher(
                     if let Some(remote_static) = noise.get_remote_static() {
                         let pub_key_b64 = BASE64.encode(remote_static);
                         
-                        // 1. REPLAY CHECK (Timestamp)
-                        if payload_len != 8 {
-                            println!("Invalid Payload Length from {}", addr);
+                        // 1. REPLAY CHECK (Timestamp) & TOKEN EXTRACTION
+                        if payload_len != 40 {
+                            println!("Invalid Payload Length from {} (Expected 40, got {})", addr, payload_len);
                             jail.add_strike(addr.ip());
                             continue;
                         }
                         
                         let ts_bytes: [u8; 8] = payload_buf[..8].try_into().unwrap();
+                        let token: [u8; 32] = payload_buf[8..40].try_into().unwrap();
                         let client_ts = u64::from_be_bytes(ts_bytes);
                         
                         let now = std::time::SystemTime::now()
@@ -78,8 +78,8 @@ pub async fn start_watcher(
                             println!("Authorized Noise Session: {} [{}]", username, pub_key_b64);
                             
                             {
-                                let mut list = whitelist.lock().unwrap();
-                                list.insert(addr.ip(), (Instant::now(), roles.clone()));
+                                let mut list = session_store.lock().unwrap();
+                                list.insert(token, (Instant::now(), roles.clone()));
                             }
 
                             send_alert(

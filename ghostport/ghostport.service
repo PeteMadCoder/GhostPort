@@ -1,0 +1,29 @@
+[Unit]
+Description=GhostPort Stealth Bunker
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+# User/Group - Change these to match your deployment
+User=root
+Group=root
+
+# Environment
+Environment="GHOSTPORT_MASTER_KEY=my_secret_key"
+Environment="RUST_LOG=info"
+
+# Execution
+WorkingDirectory=/opt/ghostport
+ExecStart=/opt/ghostport/ghostport server
+
+# Restart Policy
+Restart=always
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

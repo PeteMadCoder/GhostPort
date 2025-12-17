@@ -3,7 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
@@ -48,7 +48,7 @@ use sha2::{Sha256, Digest};
 
 pub async fn start_proxy(
     config: Config, 
-    whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>>, 
+    session_store: Arc<Mutex<HashMap<[u8; 32], (Instant, Vec<String>)>>>, 
     waf: Arc<WafEngine>,
     jail: Jail
 ) {
@@ -82,9 +82,20 @@ pub async fn start_proxy(
         
     crypto.alpn_protocols = vec![b"hq-29".to_vec()]; // Basic HTTP/0.9 ALPN for simplicity or "hq"
 
-    let server_config = QuinnServerConfig::with_crypto(Arc::new(
+    let mut server_config = QuinnServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(crypto).expect("Failed to convert rustls config")
     ));
+
+    // Apply Transport Limits
+    let mut transport_config = quinn::TransportConfig::default();
+    if let Some(max_streams) = config.server.max_concurrent_bidi_streams {
+        transport_config.max_concurrent_bidi_streams(max_streams.into());
+    }
+    if let Some(timeout_ms) = config.server.max_idle_timeout_ms {
+         transport_config.max_idle_timeout(Some(quinn::IdleTimeout::try_from(Duration::from_millis(timeout_ms)).unwrap()));
+    }
+    server_config.transport_config(Arc::new(transport_config));
+
     let endpoint = Endpoint::server(server_config, addr).expect("Failed to bind QUIC Endpoint");
 
     let max_conn = config.server.max_connections.unwrap_or(1000);
@@ -110,7 +121,7 @@ pub async fn start_proxy(
         };
 
         let config_clone = config.clone();
-        let whitelist_clone = whitelist.clone();
+        let session_store_clone = session_store.clone();
         let waf_clone = waf.clone();
         let jail_clone = jail.clone();
 
@@ -129,12 +140,12 @@ pub async fn start_proxy(
             // Accept Bi-directional Streams
             while let Ok((send_stream, recv_stream)) = connection.accept_bi().await {
                 let config_c = config_clone.clone();
-                let wl_c = whitelist_clone.clone();
+                let store_c = session_store_clone.clone();
                 let waf_c = waf_clone.clone();
                 let jail_c = jail_clone.clone();
                 
                 tokio::spawn(async move {
-                    if let Err(_e) = handle_stream(send_stream, recv_stream, remote_addr, config_c, wl_c, waf_c, jail_c).await {
+                    if let Err(_e) = handle_stream(send_stream, recv_stream, remote_addr, config_c, store_c, waf_c, jail_c).await {
                          // eprintln!("Stream Error: {}", _e);
                     }
                 });
@@ -148,12 +159,37 @@ async fn handle_stream(
     mut recv_stream: quinn::RecvStream,
     addr: SocketAddr,
     config: Config,
-    whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>>,
+    session_store: Arc<Mutex<HashMap<[u8; 32], (Instant, Vec<String>)>>>,
     waf: Arc<WafEngine>,
     jail: Jail
 ) -> Result<(), Box<dyn Error>> 
 {
-    // 1. Read Headers (Simple HTTP 1.0/1.1 parsing from the stream)
+    // 1. AUTHENTICATION (Token Check)
+    let mut token = [0u8; 32];
+    if let Err(_) = recv_stream.read_exact(&mut token).await {
+         return Err("Failed to read Session Token".into());
+    }
+
+    let client_roles = {
+        let mut list = session_store.lock().unwrap();
+        // Check if token exists and remove it (Single Use)
+        if let Some((timestamp, roles)) = list.remove(&token) { 
+             if timestamp.elapsed() < Duration::from_secs(config.security.session_timeout) {
+                 roles
+             } else {
+                 println!("Session Token Expired from {}", addr);
+                 send_stream.finish()?;
+                 return Ok(());
+             }
+        } else {
+             println!("Invalid Session Token from {}", addr);
+             jail.add_strike(addr.ip());
+             send_stream.finish()?;
+             return Ok(());
+        }
+    };
+
+    // 2. Read Headers (Simple HTTP 1.0/1.1 parsing from the stream)
     let mut buffer = [0u8; 4096];
     
     let n = match tokio::time::timeout(Duration::from_secs(HEADER_READ_TIMEOUT), recv_stream.read(&mut buffer)).await {
@@ -177,26 +213,6 @@ async fn handle_stream(
     let _method = parts[0];
     let path = parts[1];
 
-    // 2. AUTHENTICATION (Noise Session Check)
-    let client_roles = {
-        let mut list = whitelist.lock().unwrap();
-        if let Some((timestamp, roles)) = list.get(&addr.ip()) {
-            if timestamp.elapsed() < Duration::from_secs(config.security.session_timeout) {
-                roles.clone()
-            } else {
-                list.remove(&addr.ip());
-                println!("Session Expired for {}", addr);
-                // Graceful close
-                send_stream.finish()?;
-                return Ok(());
-            }
-        } else {
-            println!("Unauthenticated Access Attempt from {}", addr);
-            send_stream.finish()?;
-            return Ok(());
-        }
-    };
-
     // 3. ROUTING DECISION (RBAC)
     let decision = match_route(path, &config);
     
@@ -211,10 +227,6 @@ async fn handle_stream(
                 if !client_roles.iter().any(|r| allowed.contains(r)) {
                     println!("RBAC DENIED: {} tried accessing {}", addr, path);
                     if rule.on_fail == "honeypot" {
-                        // For honeypot, we need a wrapper around quinn streams to match AsyncRead/Write
-                        // But serve_honeypot expects generic T: AsyncRead+AsyncWrite.
-                        // Quinn streams are split. We'd need a wrapper struct.
-                        // For now, let's just close to keep it simple or implement a simple response.
                         let _ = send_stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n<h1>System Error</h1>").await;
                     } else {
                         jail.add_strike(addr.ip()); 
@@ -258,13 +270,9 @@ async fn handle_stream(
     }
 
     // 6. BRIDGE (QUIC Stream <-> TCP Socket)
-    // We need to bridge the split QUIC streams with the single TCP stream.
     let (mut rd_tcp, mut wr_tcp) = backend_socket.split();
     
     let client_to_server = async {
-        // Read from QUIC RecvStream -> Write to TCP
-        // copy_buf is not available on RecvStream directly like AsyncRead
-        // We have to loop read_chunk
         loop {
             match recv_stream.read_chunk(4096, true).await {
                 Ok(Some(chunk)) => {
@@ -279,7 +287,6 @@ async fn handle_stream(
     };
 
     let server_to_client = async {
-        // Read from TCP -> Write to QUIC SendStream
         let mut buf = [0u8; 4096];
         loop {
             let n = rd_tcp.read(&mut buf).await?;

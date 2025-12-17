@@ -23,24 +23,7 @@ alert() {
          "$CRITICAL_ALERT_WEBHOOK"
 }
 
-emergency_mode() {
-    log "CRITICAL: Too many restarts. Entering EMERGENCY MODE."
-    log "ACTION: Opening SSH Port 22 for recovery..."
-    
-    # 1. Open SSH (Universal Fail-Safe)
-    if command -v ufw > /dev/null; then
-        sudo ufw allow 22/tcp
-        log "UFW: Port 22 Allowed."
-    elif command -v iptables > /dev/null; then
-        sudo iptables -I INPUT -p tcp --dport 22 -j ACCEPT
-        log "IPTABLES: Port 22 Allowed."
-    else
-        log "ERROR: No firewall tool found (ufw/iptables). Cannot open port."
-    fi
 
-    alert
-    exit 1
-}
 
 log "Starting GhostPort Watchdog..."
 
@@ -73,7 +56,8 @@ while true; do
         log "Restart Count: $restart_count / $MAX_RESTARTS"
 
         if [ $restart_count -ge $MAX_RESTARTS ]; then
-            emergency_mode
+            log "CRITICAL: Too many restarts. GhostPort Stopped (Fail-Closed)."
+            exit 1
         fi
 
         sleep 2

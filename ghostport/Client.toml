@@ -1,0 +1,18 @@
+# GhostPort Client Configuration
+# Use with: ghostport connect --profile production
+
+[profiles.production]
+target = "1.2.3.4:8443"
+knock = "1.2.3.4:9000"
+local_port = 2222
+server_pub = "RWsoUiQNE+/uc/A1dzHmQFueacUDwXnjlYFwHq/rASY="
+my_priv = "REPLACE_WITH_YOUR_PRIVATE_KEY"
+server_cert_hash = "REPLACE_WITH_SERVER_HASH"
+
+[profiles.staging]
+target = "10.0.0.5:8443"
+knock = "10.0.0.5:9000"
+local_port = 2223
+server_pub = "..."
+my_priv = "..."
+server_cert_hash = "..."

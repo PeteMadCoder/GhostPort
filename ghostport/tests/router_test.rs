@@ -2,8 +2,18 @@ use ghostport::router::{match_route, RoutingDecision};
 use ghostport::config::{Config, RuleConfig, ServerConfig, BackendConfig, SecurityConfig, ReportingConfig, BanConfig};
 
 fn mock_config() -> Config {
-    Config {
-        server: ServerConfig { listen_ip: "0.0.0.0".into(), listen_port: 0, tls_enabled: false, cert_path: "".into(), key_path: "".into(), max_connections: None },
+    let config = Config {
+        server: ServerConfig { 
+            listen_ip: "0.0.0.0".into(), 
+            listen_port: 0, 
+            knock_port: 0,
+            tls_enabled: false, 
+            cert_path: "".into(), 
+            key_path: "".into(),
+            max_connections: None,
+            max_concurrent_bidi_streams: None,
+            max_idle_timeout_ms: None,
+        },
         backend: BackendConfig { target_addr: "".into(), target_host: "".into() },
         security: SecurityConfig { 
             enable_deep_analysis: false, 
@@ -20,7 +30,8 @@ fn mock_config() -> Config {
             RuleConfig { path: "/api/v1".into(), allowed_roles: None, on_fail: "block".into() }, // None means "Any authenticated user"
         ],
         users: None,
-    }
+    };
+    config
 }
 
 #[test]

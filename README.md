@@ -1,177 +1,155 @@
 # GhostPort
 > **Zero-Trust Stealth Bunker**\
-> **Current Version:** v5.1 (Stealth Bunker + Security Hardening)\
-> **Status:** Production-Ready Core\
+> **Current Version:** v5.2 (Hardened Core + Client Profiles)\
+> **Status:** Production-Ready\
 > **Language:** Rust
 
 ![GhostPort Logo](/ghostport.png)
 
 ## Overview
-**GhostPort** has evolved from a security-hardened reverse proxy into a dedicated **Stealth Bunker** for critical infrastructure. 
-
-While earlier versions (v1-v3) aimed to be a "Better Nginx" with security features, **v5.0** represents a strategic pivot. We are no longer a general-purpose web server. GhostPort is now a specialized, invisible gateway designed solely to protect high-value internal services (SSH, RDP, Kubernetes APIs, Admin Panels) from the public internet.
-
-In **v5.1**, we hardened this bunker with **Certificate Pinning** and **Replay Protection** to ensure it withstands advanced network attacks.
+**GhostPort** is a specialized **Stealth Bunker** designed to protect high-value internal services (SSH, RDP, Kubernetes APIs) from the public internet. It is not a general-purpose web server; it is an invisible gateway that remains completely silent to unauthorized scans.
 
 ---
 
-## Architecture (v5.1)
+## Architecture (v5.2)
 
 ```mermaid
 graph TD
-    subgraph "Initial Connection"
-        A[External Attacker] -->|Port Scan| B{Port Scan Type}
-        B -->|TCP| C[Connection Refused]
-        B -->|UDP| D[Silent Drop]
+    subgraph "Phase 1: Authorization (UDP)"
+        A[Client] -->|1. Encrypted Knock + Session Token| B[UDP Watcher :9000]
+        B -->|2. Verify Key & Timestamp| C[Token Store]
+        B -->|3. Store Valid Token| C
     end
-    
-    subgraph "Authentication Flow"
-        E[Admin User] -->|1. Connect| F[Local Tunnel :2222]
-        F -->|2. Send UDP Knock| G[UDP Watcher :9000]
-        G -->|3. Verify Timestamp & Key| H[Session Table]
+
+    subgraph "Phase 2: Connection (QUIC)"
+        A -->|4. QUIC Handshake| D[QUIC Listener :8443]
+        D -->|5. Verify Cert Pinning| A
+        A -->|6. Send Session Token| D
+        D -->|7. Consume Token| C
+        C -->|Valid?| E{Token Valid?}
+        E -->|No| G[Drop Connection]
+        E -->|Yes| H{RBAC Check}
+        H -->|Authorized| F[Internal Service]
+        H -->|Unauthorized| I[Honeypot/Block]
     end
-    
-    subgraph "Authorization Flow"
-        F -->|4. Establish QUIC Stream| I[QUIC Listener :8443]
-        I -->|5. Validate Certificate & Session| J{RBAC Check}
-        J -->|Authorized| K[Internal Service]
-        J -->|Unauthorized| L[Honeypot Portal]
-    end
-    
-    style A fill:#990000,color:#ffffff,stroke:#ff6666
-    style B fill:#333333,color:#ffffff,stroke:#666666
-    style C fill:#663300,color:#ffffff,stroke:#cc6600
-    style D fill:#003333,color:#ffffff,stroke:#006666
-    
-    style E fill:#003366,color:#ffffff,stroke:#0066cc
-    style F fill:#330066,color:#ffffff,stroke:#6633cc
-    style G fill:#006633,color:#ffffff,stroke:#00cc66
-    style H fill:#333333,color:#ffffff,stroke:#666666
-    
-    style I fill:#660033,color:#ffffff,stroke:#cc0066
-    style J fill:#333333,color:#ffffff,stroke:#666666
-    style K fill:#006600,color:#ffffff,stroke:#00cc00
-    style L fill:#996600,color:#000000,stroke:#ffcc00
-    
-    linkStyle 0 stroke:#ff6666,stroke-width:2px
-    linkStyle 1 stroke:#cc6600,stroke-width:2px
-    linkStyle 2 stroke:#006666,stroke-width:2px
-    linkStyle 3 stroke:#0066cc,stroke-width:2px
-    linkStyle 4 stroke:#00cc66,stroke-width:2px
-    linkStyle 5 stroke:#666666,stroke-width:2px
-    linkStyle 6 stroke:#cc0066,stroke-width:2px
-    linkStyle 7 stroke:#666666,stroke-width:2px
-    linkStyle 8 stroke:#00cc00,stroke-width:2px
-   
 ```
 
 ---
 
-## Version History & Changelog
+## Key Features
 
-### **v5.1: Security Hardening (Current)**
-*   **Security:** **Certificate Pinning**. The Client now requires the Server's Certificate Hash (`--server-cert-hash`) to prevent MITM attacks on the QUIC tunnel.
-*   **Security:** **Timestamp Replay Protection**. The Noise Handshake now includes a signed timestamp. Packets older than 30 seconds are rejected.
-*   **Quality:** **Comprehensive Test Suite**. Added Unit, Integration, and End-to-End System tests covering all critical paths.
+### Zero-Trust Security
+*   **Single Packet Authorization (SPA):** The server ignores all traffic until it receives a valid, encrypted UDP "Knock" (Noise Protocol).
+*   **Session Tokens:** Eliminates IP-based trust. Authorization is granted via a cryptographically secure, single-use token exchanged during the knock.
+*   **Certificate Pinning:** Clients must verify the server's certificate fingerprint to prevent MITM attacks.
+*   **Argon2 Encryption:** Private keys are encrypted at rest using the memory-hard Argon2id algorithm.
 
-### **v5.0: The Stealth Bunker**
-*   **Protocol Migration (TCP &rarr; UDP):** Replaced `tokio::net::TcpListener` with `quinn` (QUIC). The Data Plane is now entirely UDP-based.
-*   **New Feature: Local Tunneling:** Introduced `ghostport connect` CLI to bridge local TCP traffic into the remote QUIC stream.
-*   **New Feature: Anti-Lockout Watchdog:** Added `scripts/watchdog.sh`. If the GhostPort binary crashes >3 times, it automatically opens standard SSH (Port 22) via UFW/Iptables to prevent admin lockout.
-*   **Removed Feature:** **Public Routes**. All routes are now strictly private.
+### Active Defense
+*   **The Jailkeeper:** Automatically bans IPs that send invalid packets, replay attacks, or trigger the WAF.
+*   **Fail-Closed Architecture:** If the service fails, it stays closed. No "fail-open" fallbacks that expose ports.
+*   **Strict WAF:** Deep packet inspection for SQLi, XSS, and Traversal attacks.
 
-### **v4.0: The Crypto-Identity Edition**
-*   **Major Overhaul:** Replaced the TOTP/String-based auth system with the **Noise Protocol**.
-*   **Feature: Mutual Authentication:** Both Server and Client verify each other's static public keys.
-*   **Feature: Encrypted Configuration:** The Server's Private Key is stored as an encrypted Base64 blob.
-
-### **v3.0: Identity & Access Management (IAM)**
-*   **Feature: RBAC (Role-Based Access Control):** Users are assigned roles, and paths enforce role requirements.
-*   **Feature: TOTP Integration:** Replaced static passwords with Time-based One-Time Passwords.
-
-### **v2.1: The Hardened Edition**
-*   **Feature: The Jailkeeper:** An active defense system. 3 Strikes = 1 Hour IP Ban.
-*   **Feature: DoS Protection:** Slowloris timeouts and Semaphore connection limits.
-
-### **v2.0: The Security Gateway**
-*   **Feature: Single Packet Authorization (SPA):** The first implementation of the "Knock".
-*   **Feature: Honeypot:** First implementation of the deception module.
-
-### **v1.0: The Prototype**
-*   **Core:** Basic TCP Proxying.
+### Production Ready
+*   **QUIC Transport:** High-performance, encrypted data plane (HTTP/3-like) using `quinn` and `rustls`.
+*   **Client Profiles:** Manage multiple environments (Prod, Staging) easily via `Client.toml`.
+*   **Systemd Integration:** Includes a hardened service file for Linux deployment.
 
 ---
 
-## How to Run
-
-### Prerequisites
-1.  **Rust Toolchain:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-2.  **Generate Certs:** `openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes`
+## Quick Start
 
 ### 1. Build
 ```bash
 car go build --release
 ```
 
-### 2. Generate Identities
+### 2. Generate Keys
 ```bash
-# Server Key (Encrypted)
-car go run -- keygen --master-key "my_secret"
+# Server (Encrypted with Master Key)
+cargo run -- keygen --master-key "my_secret_password"
 
-# Client Key (Raw)
-car go run -- keygen --master-key "temp"
+# Client (Raw Key for local use)
+cargo run -- keygen --master-key "temp"
 ```
 
-### 3. Start Server
-```bash
-export GHOSTPORT_MASTER_KEY="my_secret"
-./scripts/watchdog.sh
-# COPY THE CERTIFICATE HASH PRINTED IN THE LOGS!
+### 3. Configure Server (`GhostPort.toml`)
+See the **Configuration** section below for details.
+
+### 4. Configure Client (`Client.toml`)
+Create a `Client.toml` to save your connection details:
+```toml
+[profiles.production]
+target = "1.2.3.4:8443"
+knock = "1.2.3.4:9000"
+local_port = 2222
+server_pub = "..."
+my_priv = "..."
+server_cert_hash = "..." # Get this from Server logs at startup
 ```
 
-### 4. Connect (Client Tunnel)
+### 5. Connect
 ```bash
-car go run -- connect \
-  --target "1.2.3.4:8443" \
-  --knock "1.2.3.4:9000" \
-  --local-port 2222 \
-  --server-pub "<SERVER_PUB_KEY>" \
-  --my-priv "<CLIENT_PRIV_KEY>" \
-  --server-cert-hash "<HASH_FROM_STEP_3>"
-```
+# Connect using the profile
+cargo run -- connect --profile production
 
-### 5. Access
-```bash
+# Or access via the local tunnel
 ssh -p 2222 user@localhost
 ```
 
 ---
 
 ## Configuration (`GhostPort.toml`)
-All rules are **Private**.
+
+All rules are **Private**. This file controls the Server's behavior.
 
 ```toml
 [server]
 listen_ip = "0.0.0.0"
 listen_port = 8443
+knock_port = 9000        # UDP Port for Single Packet Authorization
 tls_enabled = true
 cert_path = "./certs/server.crt"
 key_path = "./certs/server.key"
+# DoS Protection: QUIC Resource Limits
+max_concurrent_bidi_streams = 100
+max_idle_timeout_ms = 30000
 
 [backend]
-target_addr = "127.0.0.1:22"
+target_addr = "127.0.0.1:22" # The hidden service to protect
 target_host = "localhost"
 
 [security]
+# Encrypted Private Key (Base64).
+# Generated via `ghostport keygen --master-key <SECRET>`.
+# Server requires `GHOSTPORT_MASTER_KEY=<SECRET>` env var to decrypt this at startup.
 encrypted_private_key = "..." 
+session_timeout = 30
+enable_deep_analysis = true
+
+[security.ban]
+enabled = true
+ban_duration = 3600      # Ban duration in seconds (1 Hour)
+max_violations = 3       # Strikes before ban
 
 [[users]]
 username = "admin"
 roles = ["superadmin"]
-public_key = "..."
+public_key = "..."       # Client's Public Key (Base64)
 
 [[rules]]
 path = "/"
 allowed_roles = ["superadmin"]
-on_fail = "honeypot"
+on_fail = "honeypot"     # Actions: "block" or "honeypot"
 ```
+
+---
+
+## Deployment (Systemd)
+
+1. Copy binary to `/opt/ghostport/`.
+2. Copy `ghostport.service` to `/etc/systemd/system/`.
+3. Update paths and `GHOSTPORT_MASTER_KEY` in the service file.
+4. Enable and start:
+   ```bash
+   systemctl enable --now ghostport
+   ```

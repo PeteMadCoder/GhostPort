@@ -7,6 +7,7 @@ use std::sync::Arc;
 use quinn::{ClientConfig, Endpoint, TransportConfig};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use sha2::{Sha256, Digest};
+use rand::Rng;
 
 static NOISE_PATTERN: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 
@@ -79,7 +80,7 @@ pub async fn start_client(
 
     // 1. Send the Knock (Noise Auth)
     println!("Initiating Noise Handshake with {}...", knock_addr);
-    send_knock(knock_addr, server_pub_key_b64, my_priv_key_b64).await?;
+    let token = send_knock(knock_addr, server_pub_key_b64, my_priv_key_b64).await?;
     println!("Knock sent! Connection authorized.");
 
     // 2. Setup Local TCP Listener
@@ -133,6 +134,12 @@ pub async fn start_client(
             }
         };
 
+        // Send Session Token
+        if let Err(e) = send_stream.write_all(&token).await {
+            eprintln!("Failed to send token: {}", e);
+            continue;
+        }
+
         // Spawn Tunnel Logic
         tokio::spawn(async move {
             let (mut rd_tcp, mut wr_tcp) = tcp_socket.split();
@@ -173,7 +180,7 @@ pub async fn send_knock(
     server_addr: &str,
     server_pub_key_b64: &str,
     my_priv_key_b64: &str
-) -> Result<(), Box<dyn Error>> {
+) -> Result<[u8; 32], Box<dyn Error>> {
     let server_pub = BASE64.decode(server_pub_key_b64)?;
     let my_priv = BASE64.decode(my_priv_key_b64)?;
 
@@ -183,11 +190,18 @@ pub async fn send_knock(
         .remote_public_key(&server_pub)
         .build_initiator()?;
 
-    // PAYLOAD: Current Timestamp (8 bytes) to prevent Replay Attacks
+    // PAYLOAD: Current Timestamp (8 bytes) + Token (32 bytes)
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
-    let payload = now.to_be_bytes();
+    
+    let mut rng = rand::thread_rng();
+    let mut token = [0u8; 32];
+    rng.fill(&mut token);
+
+    let mut payload = Vec::with_capacity(40);
+    payload.extend_from_slice(&now.to_be_bytes());
+    payload.extend_from_slice(&token);
 
     let mut buf = [0u8; 65535];
     let len = noise.write_message(&payload, &mut buf)?;
@@ -195,5 +209,5 @@ pub async fn send_knock(
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     socket.send_to(&buf[..len], server_addr).await?;
 
-    Ok(())
+    Ok(token)
 }

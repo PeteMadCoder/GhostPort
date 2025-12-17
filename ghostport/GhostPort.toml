@@ -5,10 +5,13 @@
 [server]
 listen_ip = "0.0.0.0"
 listen_port = 8443
+knock_port = 9000
 tls_enabled = true
 cert_path = "./certs/server.crt"
 key_path = "./certs/server.key"
 max_connections = 1000
+max_concurrent_bidi_streams = 100
+max_idle_timeout_ms = 30000
 
 [backend]
 target_addr = "127.0.0.1:8080"

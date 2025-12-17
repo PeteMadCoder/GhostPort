@@ -1,4 +1,4 @@
-use ghostport::config::load_config;
+use ghostport::config::{load_config, load_client_config};
 use ghostport::udp::start_watcher;
 use ghostport::proxy::start_proxy;
 use ghostport::waf::WafEngine;
@@ -10,7 +10,6 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use std::time::Instant;
-use std::net::IpAddr;
 use clap::{Parser, Subcommand};
 use snow::Builder;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -35,22 +34,29 @@ enum Commands {
     Connect {
         /// Target Address (IP:Port of the Service, e.g., 1.2.3.4:8443)
         #[arg(long)]
-        target: String,
+        target: Option<String>,
         /// Knock Address (IP:Port of the Watcher, e.g., 1.2.3.4:9000)
         #[arg(long)]
-        knock: String,
+        knock: Option<String>,
         /// Local Port to bind (e.g., 2222)
-        #[arg(long, default_value_t = 2222)]
-        local_port: u16,
+        #[arg(long)]
+        local_port: Option<u16>,
         /// Server's Public Key (Base64)
         #[arg(long)]
-        server_pub: String,
+        server_pub: Option<String>,
         /// Your Private Key (Base64)
         #[arg(long)]
-        my_priv: String,
-        /// Server Certificate SHA256 Hash (Hex) - Displayed on Server Startup
+        my_priv: Option<String>,
+        /// Server Certificate SHA256 Hash (Hex)
         #[arg(long)]
-        server_cert_hash: String,
+        server_cert_hash: Option<String>,
+        
+        /// Profile Name (from Client.toml)
+        #[arg(long)]
+        profile: Option<String>,
+        /// Path to Client Configuration File (default: Client.toml)
+        #[arg(long, default_value = "Client.toml")]
+        config: String,
     },
     /// Generate a new Noise Keypair (and encrypt the private key)
     Keygen {
@@ -71,8 +77,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     match cli.command {
         Commands::Server { safe_mode } => run_server(safe_mode).await?,
-        Commands::Connect { target, knock, local_port, server_pub, my_priv, server_cert_hash } => {
-            start_client(&target, &knock, local_port, &server_pub, &my_priv, &server_cert_hash).await?;
+        Commands::Connect { 
+            target, knock, local_port, server_pub, my_priv, server_cert_hash, profile, config 
+        } => {
+            // Logic: Profile > Flags > Error
+            let (t, k, l, s, m, h) = if let Some(p_name) = profile {
+                let c = load_client_config(&config).map_err(|e| format!("Failed to load {}: {}", config, e))?;
+                let p = c.profiles.get(&p_name).ok_or(format!("Profile '{}' not found in {}", p_name, config))?;
+                
+                (
+                    target.unwrap_or(p.target.clone()),
+                    knock.unwrap_or(p.knock.clone()),
+                    local_port.unwrap_or(p.local_port),
+                    server_pub.unwrap_or(p.server_pub.clone()),
+                    my_priv.unwrap_or(p.my_priv.clone()),
+                    server_cert_hash.unwrap_or(p.server_cert_hash.clone())
+                )
+            } else {
+                // No profile, check flags
+                if target.is_none() || knock.is_none() || server_pub.is_none() || my_priv.is_none() || server_cert_hash.is_none() {
+                    return Err("Missing required arguments. Use flags or --profile.".into());
+                }
+                (
+                    target.unwrap(),
+                    knock.unwrap(),
+                    local_port.unwrap_or(2222),
+                    server_pub.unwrap(),
+                    my_priv.unwrap(),
+                    server_cert_hash.unwrap()
+                )
+            };
+            
+            start_client(&t, &k, l, &s, &m, &h).await?;
         }
         Commands::Keygen { master_key } => {
             // Generate Keypair using Snow
@@ -145,9 +181,9 @@ async fn run_server(safe_mode: bool) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    // 2. Shared State (The Whitelist)
-    // Map: IP -> (Timestamp, Roles)
-    let whitelist: Arc<Mutex<HashMap<IpAddr, (Instant, Vec<String>)>>> = Arc::new(Mutex::new(HashMap::new()));
+    // 2. Shared State (The Session Store)
+    // Map: Token ([u8; 32]) -> (Timestamp, Roles)
+    let session_store: Arc<Mutex<HashMap<[u8; 32], (Instant, Vec<String>)>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // 3. Auth Manager
     let users = config.users.clone().unwrap_or_default();
@@ -164,14 +200,14 @@ async fn run_server(safe_mode: bool) -> Result<(), Box<dyn Error>> {
 
     // 6. Start UDP Watcher (Background)
     let udp_config = config.clone();
-    let udp_whitelist = whitelist.clone();
+    let udp_sessions = session_store.clone();
     let udp_auth = auth.clone();
     let udp_jail = jail.clone();
     // Pass the raw private key
-    tokio::spawn(start_watcher(udp_config, server_private_key, udp_whitelist, udp_auth, udp_jail));
+    tokio::spawn(start_watcher(udp_config, server_private_key, udp_sessions, udp_auth, udp_jail));
 
     // 7. Start TCP Proxy (Main Thread)
-    start_proxy(config, whitelist, waf, jail).await;
+    start_proxy(config, session_store, waf, jail).await;
 
     Ok(())
 }

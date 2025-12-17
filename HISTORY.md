@@ -92,10 +92,31 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 
 ---
 
-## v5.1: Security Hardening (Current)
+## v5.1: Security Hardening
 **Goal:** Address critical vulnerabilities found in v5.0 audits and establish a rigorous testing baseline.
 
 ### Key Features
 *   **Certificate Pinning:** Addressed a critical MITM vulnerability in the QUIC tunnel. The client now strictly verifies the server's certificate SHA256 fingerprint (`--server-cert-hash`) before sending data.
 *   **Timestamp Replay Protection:** Addressed a replay vulnerability in the Noise handshake. The UDP "Knock" now contains a signed timestamp, and the server rejects packets older than 30 seconds.
 *   **Comprehensive Test Suite:** Added `tests/e2e_system.rs` for full end-to-end regression testing (Server + Client + Backend + Keys + Config), along with unit tests for Jail, Router, and WAF.
+
+---
+
+## v5.2: The Hardened Core & Client Experience (Current)
+**Goal:** Fix critical architectural flaws (Session Hijacking) and improve production usability.
+
+### Security Fixes (Critical)
+*   **Session Tokens:** Removed IP-based authorization (which failed behind NATs). Implemented a cryptographically secure **Session Token** system.
+    *   Clients generate a random 32-byte token during the UDP knock.
+    *   This token is validated and consumed by the QUIC server to authorize the stream.
+    *   This eliminates the risk of IP spoofing or shared-NAT hijacking.
+*   **Fail-Closed Architecture:** Removed the dangerous "Fail-Open" logic from the watchdog. If GhostPort crashes, ports remain closed, maintaining the stealth posture.
+*   **Argon2 KDF:** Upgraded private key encryption from SHA256 to **Argon2id** (memory-hard) to prevent brute-force attacks on the master key.
+
+### Operational Improvements
+*   **Client Profiles:** Added support for `Client.toml` and the `--profile` flag. Users can now save connection details for multiple environments (Production, Staging) instead of typing long CLI flags.
+*   **QUIC Resource Limits:** Enforced strict limits on `max_concurrent_bidi_streams` and `max_idle_timeout` in the server configuration to prevent DoS attacks via resource exhaustion.
+*   **Systemd Integration:** Added a production-ready `ghostport.service` file with hardening directives.
+
+### Testing
+*   **Negative Testing:** Added regression tests for Certificate Pinning failures and Replay Attacks to ensure security controls are active.
