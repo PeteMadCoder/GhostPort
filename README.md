@@ -1,6 +1,6 @@
 # GhostPort
 > **Zero-Trust Stealth Bunker**\
-> **Current Version:** v5.3.2 (Hardened + WAF Fixes)\
+> **Current Version:** v5.3.3 (Critical ACL Fix)\
 > **Status:** Production-Ready\
 > **Language:** Rust
 

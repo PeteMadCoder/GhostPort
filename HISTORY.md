@@ -148,3 +148,11 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 ### Security Fixes
 *   **VULN-019 (Connection Persistence / TOCTOU):** Addressed a flaw where banning an IP did not affect *existing* QUIC connections. Attackers could maintain a connection and open new streams even after being banned. The system now enforces the Jail check on *every* new stream creation, ensuring instant termination of access.
 *   **VULN-020 (WAF Double Encoding):** Implemented recursive URL decoding (up to 5 levels) in the WAF engine. This prevents attackers from bypassing SQLi and XSS filters using double or triple URL encoding (e.g., `%2527` -> `%27` -> `'`).
+
+---
+
+## v5.3.3: Critical ACL Patch (Current)
+**Goal:** Fix a critical bypass in the Access Control logic.
+
+### Security Fixes
+*   **VULN-021 (ACL Bypass via URL Encoding):** Fixed a critical vulnerability where attackers could bypass Role-Based Access Control (RBAC) by URL-encoding characters in the request path (e.g., `/%61dmin`). The router now performs recursive URL decoding to determine the **canonical** path before matching it against security rules, ensuring consistent enforcement.

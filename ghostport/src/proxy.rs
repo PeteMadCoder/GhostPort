@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::time::{Instant, Duration};
+use urlencoding::decode;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivateKeyDer::Pkcs8};
 use quinn::{Endpoint, ServerConfig as QuinnServerConfig};
@@ -227,8 +228,22 @@ async fn handle_stream(
     let _method = parts[0];
     let path = parts[1];
 
+    // Decode Path for Routing (ACL Bypass Fix)
+    // We must route based on the *canonical* path, otherwise /%61dmin != /admin
+    let mut canonical_path = path.to_string();
+    for _ in 0..5 {
+        match decode(&canonical_path) {
+            Ok(cow) => {
+                let next = cow.into_owned();
+                if next == canonical_path { break; }
+                canonical_path = next;
+            },
+            Err(_) => break, 
+        }
+    }
+
     // 3. ROUTING DECISION (RBAC)
-    let decision = match_route(path, &config);
+    let decision = match_route(&canonical_path, &config);
     
     match decision {
         RoutingDecision::DefaultBlock => {
@@ -239,7 +254,7 @@ async fn handle_stream(
         RoutingDecision::Matched(rule) => {
             if let Some(allowed) = &rule.allowed_roles {
                 if !client_roles.iter().any(|r| allowed.contains(r)) {
-                    println!("RBAC DENIED: {} tried accessing {}", addr, path);
+                    println!("RBAC DENIED: {} tried accessing {}", addr, canonical_path);
                     if rule.on_fail == "honeypot" {
                         let _ = send_stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n<h1>System Error</h1>").await;
                     } else {
