@@ -28,17 +28,18 @@ impl WafEngine {
     }
 
     pub fn check_request(&self, path: &str, headers: &str) -> Option<String> {
-        // Decode Inputs
-        let decoded_path = match decode(path) {
-            Ok(cow) => cow.into_owned(),
-            Err(_) => path.to_string(),
-        };
-        
-        // We probably don't want to full URL decode headers as they might contain binary data or special chars that matter,
-        // but for WAF purposes, decoding might reveal hidden attacks. 
-        // Let's decode headers too, but be careful. 
-        // Actually, headers are usually not URL encoded in the same way, but parameters inside them might be.
-        // Let's stick to decoding path for now as that's the primary vector for URL encoding attacks.
+        // Recursively Decode Inputs (Anti-Evasion)
+        let mut decoded_path = path.to_string();
+        for _ in 0..5 {
+            match decode(&decoded_path) {
+                Ok(cow) => {
+                    let next = cow.into_owned();
+                    if next == decoded_path { break; } // Stopped changing
+                    decoded_path = next;
+                },
+                Err(_) => break, // Decoding failed, stop
+            }
+        }
         
         // Check Path
         for rule in &self.rules {

@@ -164,6 +164,13 @@ async fn handle_stream(
     jail: Jail
 ) -> Result<(), Box<dyn Error>> 
 {
+    // 0. TOCTOU CHECK (Layer 3 Firewall per Stream)
+    // Even if the connection is open, check if the IP got banned recently.
+    if !jail.check_ip(addr.ip()) {
+        send_stream.finish()?;
+        return Ok(()); 
+    }
+
     // 1. AUTHENTICATION (Token Check)
     let mut token = [0u8; 32];
     if let Err(_) = recv_stream.read_exact(&mut token).await {
