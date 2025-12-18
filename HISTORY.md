@@ -102,7 +102,7 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 
 ---
 
-## v5.2: The Hardened Core & Client Experience (Current)
+## v5.2: The Hardened Core & Client Experience
 **Goal:** Fix critical architectural flaws (Session Hijacking) and improve production usability.
 
 ### Security Fixes (Critical)
@@ -123,10 +123,19 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 
 ---
 
-## v5.3: DoS Resilience (Current)
+## v5.3: DoS Resilience
 **Goal:** Address Critical Denial-of-Service vulnerabilities identified in the 5.2 security audit.
 
 ### Security Fixes
 *   **VULN-001 (UDP CPU Exhaustion):** Implemented a "Pre-Auth IP Check". The UDP Watcher now checks if an IP is banned **before** attempting to process/decrypt the Noise handshake. This prevents banned IPs from exhausting server CPU with garbage packets.
 *   **VULN-002 (Token Leak):** Implemented a "Housekeeper" background task that periodically scans the Session Store and removes expired tokens to prevent memory exhaustion.
 *   **VULN-003 (Jail Leak):** The Housekeeper now also cleans up expired bans from the Jail memory, preventing infinite growth of the ban list.
+
+---
+
+## v5.3.1: Security Patch (Current)
+**Goal:** Emergency fixes for residual DoS vectors found in 5.3 post-release audit.
+
+### Security Fixes
+*   **VULN-017 (UDP Decryption DoS):** Fixed a logical flaw in VULN-001 where invalid packets (bad key/decrypt fail) did not trigger a strike/ban, allowing attackers to bypass the Jail and exhaust CPU. Now, any Noise handshake failure immediately strikes the source IP.
+*   **VULN-018 (Lock Poisoning):** Removed all `unwrap()` calls on internal locks (`Mutex`/`RwLock`). The system now handles lock poisoning gracefully (failing closed for the specific request) instead of panicking the entire server process.
