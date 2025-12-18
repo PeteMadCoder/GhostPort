@@ -83,16 +83,24 @@ pub async fn start_watcher(
                         if let Some((username, roles)) = auth.verify_key(&pub_key_b64) {
                             println!("Authorized Noise Session: {} [{}]", username, pub_key_b64);
                             
-                            {
-                                let mut list = session_store.lock().unwrap();
-                                list.insert(token, (Instant::now(), roles.clone()));
-                            }
+                            let stored = match session_store.lock() {
+                                Ok(mut list) => {
+                                    list.insert(token, (Instant::now(), roles.clone()));
+                                    true
+                                }
+                                Err(e) => {
+                                    eprintln!("CRITICAL: Session Store Lock Poisoned: {}", e);
+                                    false
+                                }
+                            };
 
-                            send_alert(
-                                config.clone(), 
-                                format!("Authorized new session for IP: {} (User: {})", addr.ip(), username), 
-                                AlertLevel::Info
-                            ).await;
+                            if stored {
+                                send_alert(
+                                    config.clone(), 
+                                    format!("Authorized new session for IP: {} (User: {})", addr.ip(), username), 
+                                    AlertLevel::Info
+                                ).await;
+                            }
                         } else {
                             println!("Unauthorized Key: {}", pub_key_b64);
                             jail.add_strike(addr.ip());
@@ -103,8 +111,7 @@ pub async fn start_watcher(
                     }
                 } else {
                     // Decryption failed (Bad Key or Bad Noise)
-                    // Silent drop (maybe debug log)
-                    // println!("Decryption Failed from {}", addr);
+                    jail.add_strike(addr.ip());
                 }
             }
             Err(e) => eprintln!("UDP Error: {}", e),

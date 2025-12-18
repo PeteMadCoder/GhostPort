@@ -171,7 +171,14 @@ async fn handle_stream(
     }
 
     let client_roles = {
-        let mut list = session_store.lock().unwrap();
+        let mut list = match session_store.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("CRITICAL: Session Store Lock Poisoned: {}", e);
+                send_stream.finish()?;
+                return Err("Internal Server Error (Lock Poisoned)".into());
+            }
+        };
         // Check if token exists and remove it (Single Use)
         if let Some((timestamp, roles)) = list.remove(&token) { 
              if timestamp.elapsed() < Duration::from_secs(config.security.session_timeout) {
