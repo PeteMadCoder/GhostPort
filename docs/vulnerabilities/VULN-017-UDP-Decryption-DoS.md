@@ -49,7 +49,7 @@ High CPU usage (DoS) as the server attempts to decrypt millions of invalid packe
 ### Verification
 
 * **Method:** Code Audit.
-* **Verified By:** AI Security Audit on 2025-12-18.
+* **Verified By:** Security Audit on 2025-12-18.
 
 ## 6. Classification & References
 
