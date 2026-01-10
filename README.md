@@ -1,6 +1,6 @@
 # GhostPort
 > **Zero-Trust Stealth Bunker**\
-> **Current Version:** v5.3.3 (Critical ACL Fix)\
+> **Current Version:** v5.3.4 (HTTP Pipelining & Memory Leak Patches)\
 > **Status:** Production-Ready\
 > **Language:** Rust
 
@@ -63,7 +63,7 @@ graph TD
 
 ### 1. Build
 ```bash
-car go build --release
+cargo build --release
 ```
 
 ### 2. Generate Keys

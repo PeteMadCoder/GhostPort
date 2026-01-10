@@ -142,7 +142,7 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 
 ---
 
-## v5.3.2: Anti-Evasion & Persistence (Current)
+## v5.3.2: Anti-Evasion & Persistence
 **Goal:** Close advanced evasion techniques and persistence mechanisms.
 
 ### Security Fixes
@@ -151,8 +151,21 @@ In v5.0, GhostPort abandoned the idea of being a "better Nginx". It is no longer
 
 ---
 
-## v5.3.3: Critical ACL Patch (Current)
+## v5.3.3: Critical ACL Patch
 **Goal:** Fix a critical bypass in the Access Control logic.
 
 ### Security Fixes
 *   **VULN-021 (ACL Bypass via URL Encoding):** Fixed a critical vulnerability where attackers could bypass Role-Based Access Control (RBAC) by URL-encoding characters in the request path (e.g., `/%61dmin`). The router now performs recursive URL decoding to determine the **canonical** path before matching it against security rules, ensuring consistent enforcement.
+
+---
+
+## v5.3.4: HTTP Pipelining & Memory Leak Patches (Current)
+**Goal:** Address Critical HTTP Request Pipelining vulnerability and additional security issues identified in the 5.3.3 post-release audit.
+
+### Security Fixes
+
+*   **VULN-022 (Memory Leak in Jail Strikes Map):** Fixed a memory leak in the IP strike tracking mechanism that could lead to resource exhaustion under sustained attack conditions. The housekeeper now properly cleans up expired strike records.
+
+*   **VULN-023 (WAF Bypass via Invalid UTF-8):** Enhanced UTF-8 validation in the WAF engine to prevent bypass attempts using malformed character sequences that could evade security filters.
+
+*   **VULN-024 (HTTP Request Pipelining Bypass):** Fixed a critical vulnerability where attackers could pipeline multiple HTTP requests in a single stream to bypass WAF and RBAC checks on subsequent requests. The proxy now implements a "One-Shot" policy for standard HTTP requests by injecting `Connection: close` headers and terminating streams after the first transaction, while preserving persistent behavior for CONNECT tunnels.

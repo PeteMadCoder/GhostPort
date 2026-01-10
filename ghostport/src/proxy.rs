@@ -163,13 +163,13 @@ async fn handle_stream(
     session_store: Arc<Mutex<HashMap<[u8; 32], (Instant, Vec<String>)>>>,
     waf: Arc<WafEngine>,
     jail: Jail
-) -> Result<(), Box<dyn Error>> 
+) -> Result<(), Box<dyn Error>>
 {
     // 0. TOCTOU CHECK (Layer 3 Firewall per Stream)
     // Even if the connection is open, check if the IP got banned recently.
     if !jail.check_ip(addr.ip()) {
         send_stream.finish()?;
-        return Ok(()); 
+        return Ok(());
     }
 
     // 1. AUTHENTICATION (Token Check)
@@ -188,7 +188,7 @@ async fn handle_stream(
             }
         };
         // Check if token exists and remove it (Single Use)
-        if let Some((timestamp, roles)) = list.remove(&token) { 
+        if let Some((timestamp, roles)) = list.remove(&token) {
              if timestamp.elapsed() < Duration::from_secs(config.security.session_timeout) {
                  roles
              } else {
@@ -204,9 +204,9 @@ async fn handle_stream(
         }
     };
 
-    // 2. Read Headers (Simple HTTP 1.0/1.1 parsing from the stream)
-    let mut buffer = [0u8; 4096];
-    
+    // 2. PEEK AND BUFFER: Read initial bytes to find HTTP headers (with size limit)
+    let mut buffer = [0u8; 4096]; // 4KB limit to prevent buffering DoS
+
     let n = match tokio::time::timeout(Duration::from_secs(HEADER_READ_TIMEOUT), recv_stream.read(&mut buffer)).await {
         Ok(Ok(Some(n))) => n,
         Ok(Ok(None)) => return Ok(()), // EOF
@@ -216,16 +216,25 @@ async fn handle_stream(
 
     let headers_end = buffer[..n].windows(4).position(|w| w == b"\r\n\r\n")
         .ok_or("Invalid HTTP: No header terminator")?;
-    
+
     let header_bytes = &buffer[..headers_end];
-    let header_str = String::from_utf8_lossy(header_bytes);
-    
+    // Strict UTF-8 enforcement: reject request if not valid UTF-8
+    let header_str = match String::from_utf8(header_bytes.to_vec()) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("Invalid UTF-8 in request headers from {}", addr);
+            jail.add_strike(addr.ip());
+            send_stream.finish()?;
+            return Ok(());
+        }
+    };
+
     let mut lines = header_str.lines();
     let request_line = lines.next().ok_or("Invalid HTTP: Empty")?;
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 { return Err("Invalid Request Line".into()); }
-    
-    let _method = parts[0];
+
+    let method = parts[0];
     let path = parts[1];
 
     // Decode Path for Routing (ACL Bypass Fix)
@@ -278,18 +287,35 @@ async fn handle_stream(
     // 5. TCP EGRESS (Forward to Backend)
     let mut backend_socket = TcpStream::connect(&config.backend.target_addr).await?;
 
-    // Rewrite Headers (Host)
+    // Header Surgery: Handle CONNECT vs other HTTP methods differently
+    let is_connect = method == "CONNECT";
+
+    // Rewrite Headers (Host and Connection)
     let mut new_headers = String::new();
     new_headers.push_str(request_line);
     new_headers.push_str("\r\n");
+
     for line in lines {
-        if line.to_lowercase().starts_with("host:") {
+        // Skip any existing Connection headers to replace them
+        if line.to_lowercase().starts_with("connection:") {
+            continue; // Skip existing Connection header
+        } else if line.to_lowercase().starts_with("host:") {
             new_headers.push_str(&format!("Host: {}\r\n", config.backend.target_host));
         } else {
             new_headers.push_str(line);
             new_headers.push_str("\r\n");
         }
     }
+
+    // Inject Connection: close for non-CONNECT methods (the fix for pipelining)
+    if is_connect {
+        // For CONNECT methods, preserve persistent behavior
+        new_headers.push_str("Connection: keep-alive\r\n");
+    } else {
+        // For all other HTTP methods, force close to prevent pipelining
+        new_headers.push_str("Connection: close\r\n");
+    }
+
     new_headers.push_str("\r\n");
 
     backend_socket.write_all(new_headers.as_bytes()).await?;
@@ -300,33 +326,68 @@ async fn handle_stream(
 
     // 6. BRIDGE (QUIC Stream <-> TCP Socket)
     let (mut rd_tcp, mut wr_tcp) = backend_socket.split();
-    
-    let client_to_server = async {
-        loop {
-            match recv_stream.read_chunk(4096, true).await {
-                Ok(Some(chunk)) => {
-                    wr_tcp.write_all(&chunk.bytes).await?;
+
+    if is_connect {
+        // For CONNECT methods (tunnels), maintain persistent behavior
+        let client_to_server = async {
+            loop {
+                match recv_stream.read_chunk(4096, true).await {
+                    Ok(Some(chunk)) => {
+                        wr_tcp.write_all(&chunk.bytes).await?;
+                    }
+                    Ok(None) => break, // EOF
+                    Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
                 }
-                Ok(None) => break, // EOF
-                Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
             }
-        }
-        wr_tcp.shutdown().await?;
-        Ok::<(), std::io::Error>(())
-    };
+            wr_tcp.shutdown().await?;
+            Ok::<(), std::io::Error>(())
+        };
 
-    let server_to_client = async {
-        let mut buf = [0u8; 4096];
-        loop {
-            let n = rd_tcp.read(&mut buf).await?;
-            if n == 0 { break; }
-            send_stream.write_all(&buf[..n]).await?;
-        }
+        let server_to_client = async {
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = rd_tcp.read(&mut buf).await?;
+                if n == 0 { break; }
+                send_stream.write_all(&buf[..n]).await?;
+            }
+            send_stream.finish()?;
+            Ok::<(), std::io::Error>(())
+        };
+
+        let _ = tokio::join!(client_to_server, server_to_client);
+    } else {
+        // For non-CONNECT methods, implement one-shot behavior (fix for pipelining)
+        let client_to_server = async {
+            // Send data from client to server once
+            loop {
+                match recv_stream.read_chunk(4096, true).await {
+                    Ok(Some(chunk)) => {
+                        wr_tcp.write_all(&chunk.bytes).await?;
+                    }
+                    Ok(None) => break, // EOF
+                    Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                }
+            }
+            wr_tcp.shutdown().await?;
+            Ok::<(), std::io::Error>(())
+        };
+
+        let server_to_client = async {
+            // Receive response from server and forward to client once
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = rd_tcp.read(&mut buf).await?;
+                if n == 0 { break; }
+                send_stream.write_all(&buf[..n]).await?;
+            }
+            Ok::<(), std::io::Error>(())
+        };
+
+        let _ = tokio::join!(client_to_server, server_to_client);
+
+        // Explicitly finish the send stream after one transaction to prevent pipelining
         send_stream.finish()?;
-        Ok::<(), std::io::Error>(())
-    };
-
-    let _ = tokio::join!(client_to_server, server_to_client);
+    }
 
     Ok(())
 }

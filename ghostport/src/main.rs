@@ -16,7 +16,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 #[derive(Parser)]
 #[command(name = "ghostport")]
-#[command(version = "5.3", about = "Zero-Trust Stealth Bunker")]
+#[command(version = "5.3.4", about = "Zero-Trust Stealth Bunker")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

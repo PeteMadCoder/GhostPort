@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "ghostport"
-version = "5.3.3"
+version = "5.3.4"
 dependencies = [
  "argon2",
  "base64",
